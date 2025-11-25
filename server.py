@@ -153,9 +153,18 @@ def check_customers():
 
 
 def check_customer_payment_method(customer):
-    """Helper function to check if customer has payment method - for parallel processing"""
+    """Helper function to check if customer has payment method - OPTIMIZED for speed"""
     try:
-        # Method 1: Check for PaymentMethod (new Stripe API)
+        # FASTEST: Check invoice settings first (no API call needed!)
+        if customer.invoice_settings and customer.invoice_settings.default_payment_method:
+            return True
+        
+        # FAST: Check for default source (no extra API call)
+        if customer.default_source:
+            return True
+        
+        # SLOWER: Check for PaymentMethod (requires API call)
+        # Only do this if the above checks failed
         payment_methods = stripe.PaymentMethod.list(
             customer=customer.id,
             type='card',
@@ -164,17 +173,43 @@ def check_customer_payment_method(customer):
         if len(payment_methods.data) > 0:
             return True
         
-        # Method 2: Check for default source (older Stripe API)
-        if customer.default_source:
-            return True
-        
-        # Method 3: Check invoice settings default payment method
-        if customer.invoice_settings and customer.invoice_settings.default_payment_method:
-            return True
-        
         return False
     except:
         return False
+
+
+@app.route('/get-customers-fast', methods=['POST', 'OPTIONS'])
+def get_customers_fast():
+    """Get ONLY customer count (super fast - no payment method checking)"""
+    
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        data = request.get_json()
+        api_key = data.get('apiKey')
+        
+        if not api_key:
+            return jsonify({'success': False, 'error': 'API key is required'}), 400
+        
+        stripe.api_key = api_key
+        
+        # Get all customers (fast - no payment method checking)
+        customers = stripe.Customer.list(limit=100)
+        customer_list = list(customers.auto_paging_iter())
+        
+        return jsonify({
+            'success': True,
+            'total': len(customer_list),
+            'withPayment': 0,  # Will be updated by the full check
+            'fast': True  # Indicates this is a fast response
+        })
+    
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
 
 
 @app.route('/get-customers', methods=['POST', 'OPTIONS'])
@@ -202,8 +237,8 @@ def get_customers():
         with_payment = 0
         
         # Use parallel processing to check payment methods (MUCH faster!)
-        # Check up to 20 customers at the same time
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        # Check up to 50 customers at the same time for maximum speed
+        with ThreadPoolExecutor(max_workers=50) as executor:
             # Submit all tasks
             future_to_customer = {
                 executor.submit(check_customer_payment_method, customer): customer 
