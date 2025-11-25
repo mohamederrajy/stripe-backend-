@@ -367,7 +367,7 @@ def charge_customers():
         if max_customers > 0 and len(customers_to_charge) > max_customers:
             customers_to_charge = customers_to_charge[:max_customers]
         
-        # Charge customers - FORCE SKIP Link/GPay/APay
+        # Charge customers - PARALLEL PROCESSING for speed!
         results = {
             'success': True,
             'total': len(customers_to_charge),
@@ -377,7 +377,9 @@ def charge_customers():
             'skipped_special_payment': skipped_special_payment
         }
         
-        for customer in customers_to_charge:
+        # Helper function for parallel charging
+        def charge_single_customer(customer):
+            """Charge a single customer - for parallel processing"""
             try:
                 # Get customer's payment method - FORCE SKIP Link/GPay/APay
                 cust_obj = stripe.Customer.retrieve(customer['id'])
@@ -459,36 +461,54 @@ def charge_customers():
                         'exp_year': '',
                     }
                 
-                results['successful'] += 1
-                results['charges'].append({
-                    'customer': customer,
+                # Add small delay to avoid rate limits
+                if delay > 0:
+                    time.sleep(delay)
+                
+                return {
                     'status': 'success',
+                    'customer': customer,
                     'chargeId': charge_id,
                     'amount': amount_dollars,
                     'currency': currency.upper(),
                     'timestamp': datetime.now().isoformat(),
                     'card': card_info,
                     'description': description
-                })
+                }
             
             except Exception as e:
                 error_msg = getattr(e, 'user_message', str(e))
                 error_code = getattr(e, 'code', 'unknown')
                 error_type = type(e).__name__
                 
-                results['failed'] += 1
-                results['charges'].append({
-                    'customer': customer,
+                return {
                     'status': 'failed',
+                    'customer': customer,
                     'error': error_msg,
                     'errorCode': error_code,
                     'errorType': error_type,
                     'timestamp': datetime.now().isoformat()
-                })
+                }
+        
+        # Use parallel processing to charge customers FAST!
+        # Process up to 10 customers at once (safe for Stripe Radar)
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            # Submit all charging tasks
+            future_to_customer = {
+                executor.submit(charge_single_customer, customer): customer 
+                for customer in customers_to_charge
+            }
             
-            # Delay between charges (same as script)
-            if delay > 0:
-                time.sleep(delay)
+            # Collect results as they complete
+            for future in as_completed(future_to_customer):
+                result = future.result()
+                
+                if result['status'] == 'success':
+                    results['successful'] += 1
+                    results['charges'].append(result)
+                else:
+                    results['failed'] += 1
+                    results['charges'].append(result)
         
         return jsonify(results)
     
@@ -505,11 +525,13 @@ def charge_customers():
 
 if __name__ == '__main__':
     print("\n" + "="*70)
-    print("🚀 Stripe Rebilling Backend Server")
+    print("🚀 Stripe Rebilling Backend Server - ULTRA FAST MODE")
     print("="*70)
     print("\n✅ CORS enabled for all origins")
     print("✅ Using WORKING logic from charge_all_customers.py")
     print("✅ Customer diagnostic endpoint added")
+    print("⚡️ PARALLEL PROCESSING: 100 workers for customer loading")
+    print("⚡️ PARALLEL CHARGING: 10 customers charged simultaneously")
     print("🚫 FORCE SKIP: Link, Google Pay, Apple Pay (automatic)")
     print("🌐 Server running at: http://localhost:5001")
     print("\n📝 Next steps:")
