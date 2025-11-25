@@ -289,79 +289,80 @@ def charge_customers():
         stripe.api_key = api_key
         amount_cents = int(amount_dollars * 100)
         
-        # Get all customers - SAME as script
+        # Get all customers - FAST
         customers = stripe.Customer.list(limit=100)
+        customer_list = list(customers.auto_paging_iter())
         
-        # Filter customers with payment methods - FORCE SKIP Link/GPay/APay
-        customers_to_charge = []
-        skipped_special_payment = 0
-        
-        for customer in customers.auto_paging_iter():
-            has_valid_card = False
-            
+        # Helper function to filter customers in parallel
+        def check_customer_valid(customer):
+            """Check if customer has valid payment method - PARALLEL"""
             try:
-                # FORCE SKIP: Link, Google Pay, Apple Pay
-                # Check ALL payment methods for this customer
                 all_payment_methods = stripe.PaymentMethod.list(
                     customer=customer.id,
-                    limit=10  # Check multiple payment methods
+                    limit=10
                 )
                 
                 # Look for a valid card payment method (not Link/GPay/APay)
                 for pm in all_payment_methods.data:
-                    # SKIP Link payment method
-                    if pm.type == 'link':
-                        skipped_special_payment += 1
+                    # SKIP Link, Google Pay, Apple Pay
+                    if pm.type in ['link', 'google_pay', 'apple_pay']:
                         continue
-                    
-                    # SKIP if payment method has 'link' attribute
                     if hasattr(pm, 'link') and pm.link:
-                        skipped_special_payment += 1
-                        continue
-                    
-                    # SKIP Google Pay and Apple Pay
-                    if pm.type in ['google_pay', 'apple_pay']:
-                        skipped_special_payment += 1
                         continue
                     
                     # Only accept regular card type
                     if pm.type == 'card':
-                        # Double check: Make sure card is not Link-connected
+                        # Make sure card is not wallet-connected
                         if hasattr(pm, 'card') and hasattr(pm.card, 'wallet'):
                             wallet_type = pm.card.wallet.get('type') if pm.card.wallet else None
                             if wallet_type in ['google_pay', 'apple_pay', 'link']:
                                 continue
                         
-                        has_valid_card = True
-                        break
+                        # Valid card found!
+                        return {
+                            'id': customer.id,
+                            'email': customer.email or 'No email',
+                            'name': customer.name or 'No name'
+                        }
                 
-                # Fallback: Check for default source (older Stripe API)
-                # Only use if no payment methods found above
-                if not has_valid_card and customer.default_source:
-                    has_valid_card = True
-                
-                # Fallback: Check invoice settings
-                if not has_valid_card and customer.invoice_settings:
-                    if customer.invoice_settings.default_payment_method:
-                        # Retrieve and check this payment method too
-                        try:
-                            pm = stripe.PaymentMethod.retrieve(customer.invoice_settings.default_payment_method)
-                            # Apply same filters
-                            if pm.type == 'card' and pm.type not in ['link', 'google_pay', 'apple_pay']:
-                                if not (hasattr(pm, 'link') and pm.link):
-                                    has_valid_card = True
-                        except:
-                            pass
-                
-                # Only add customer if they have a valid card (not Link/GPay/APay)
-                if has_valid_card:
-                    customers_to_charge.append({
+                # Fallback: Check for default source
+                if customer.default_source:
+                    return {
                         'id': customer.id,
                         'email': customer.email or 'No email',
                         'name': customer.name or 'No name'
-                    })
+                    }
+                
+                # Fallback: Check invoice settings
+                if customer.invoice_settings and customer.invoice_settings.default_payment_method:
+                    try:
+                        pm = stripe.PaymentMethod.retrieve(customer.invoice_settings.default_payment_method)
+                        if pm.type == 'card' and pm.type not in ['link', 'google_pay', 'apple_pay']:
+                            if not (hasattr(pm, 'link') and pm.link):
+                                return {
+                                    'id': customer.id,
+                                    'email': customer.email or 'No email',
+                                    'name': customer.name or 'No name'
+                                }
+                    except:
+                        pass
+                
+                return None
             except:
-                continue
+                return None
+        
+        # Filter customers in PARALLEL (SUPER FAST!)
+        customers_to_charge = []
+        with ThreadPoolExecutor(max_workers=50) as executor:
+            future_to_customer = {
+                executor.submit(check_customer_valid, customer): customer 
+                for customer in customer_list
+            }
+            
+            for future in as_completed(future_to_customer):
+                result = future.result()
+                if result:
+                    customers_to_charge.append(result)
         
         # Apply customer limit
         if max_customers > 0 and len(customers_to_charge) > max_customers:
@@ -373,8 +374,7 @@ def charge_customers():
             'total': len(customers_to_charge),
             'successful': 0,
             'failed': 0,
-            'charges': [],
-            'skipped_special_payment': skipped_special_payment
+            'charges': []
         }
         
         # Helper function for parallel charging
