@@ -237,8 +237,8 @@ def get_customers():
         with_payment = 0
         
         # Use parallel processing to check payment methods (MUCH faster!)
-        # Check up to 50 customers at the same time for maximum speed
-        with ThreadPoolExecutor(max_workers=50) as executor:
+        # Check up to 100 customers at the same time for MAXIMUM speed
+        with ThreadPoolExecutor(max_workers=100) as executor:
             # Submit all tasks
             future_to_customer = {
                 executor.submit(check_customer_payment_method, customer): customer 
