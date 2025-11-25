@@ -234,7 +234,7 @@ def get_customers():
         customer_list = list(customers.auto_paging_iter())
         
         total = len(customer_list)
-        with_payment = 0
+        chargeable_customers = []
         
         # Use parallel processing to check payment methods (MUCH faster!)
         # Check up to 100 customers at the same time for MAXIMUM speed
@@ -245,15 +245,21 @@ def get_customers():
                 for customer in customer_list
             }
             
-            # Collect results
+            # Collect results and store chargeable customer IDs
             for future in as_completed(future_to_customer):
+                customer = future_to_customer[future]
                 if future.result():
-                    with_payment += 1
+                    chargeable_customers.append({
+                        'id': customer.id,
+                        'email': customer.email or 'No email',
+                        'name': customer.name or 'No name'
+                    })
         
         return jsonify({
             'success': True,
             'total': total,
-            'withPayment': with_payment
+            'withPayment': len(chargeable_customers),
+            'customers': chargeable_customers  # Return the actual customer list!
         })
     
     except Exception as e:
@@ -278,7 +284,7 @@ def charge_customers():
         description = data.get('description', 'Subscription charge')
         max_customers = int(data.get('maxCustomers', 0))
         delay = float(data.get('delay', 1.0))
-        skip_special_payments = True  # ALWAYS skip Link, Google Pay, Apple Pay
+        provided_customers = data.get('customers', [])  # Accept pre-filtered customer list!
         
         if not api_key:
             return jsonify({'success': False, 'error': 'API key is required'}), 400
@@ -289,80 +295,86 @@ def charge_customers():
         stripe.api_key = api_key
         amount_cents = int(amount_dollars * 100)
         
-        # Get all customers - FAST
-        customers = stripe.Customer.list(limit=100)
-        customer_list = list(customers.auto_paging_iter())
-        
-        # Helper function to filter customers in parallel
-        def check_customer_valid(customer):
-            """Check if customer has valid payment method - PARALLEL"""
-            try:
-                all_payment_methods = stripe.PaymentMethod.list(
-                    customer=customer.id,
-                    limit=10
-                )
-                
-                # Look for a valid card payment method (not Link/GPay/APay)
-                for pm in all_payment_methods.data:
-                    # SKIP Link, Google Pay, Apple Pay
-                    if pm.type in ['link', 'google_pay', 'apple_pay']:
-                        continue
-                    if hasattr(pm, 'link') and pm.link:
-                        continue
+        # OPTIMIZATION: Use pre-filtered customers if provided (INSTANT!)
+        if provided_customers and len(provided_customers) > 0:
+            customers_to_charge = provided_customers
+            print(f"⚡️ INSTANT: Using {len(provided_customers)} pre-filtered customers!")
+        else:
+            # Fallback: Filter customers on-the-fly (slower)
+            print("⏱️ No customer list provided, filtering now...")
+            customers = stripe.Customer.list(limit=100)
+            customer_list = list(customers.auto_paging_iter())
+            
+            # Helper function to filter customers in parallel
+            def check_customer_valid(customer):
+                """Check if customer has valid payment method - PARALLEL"""
+                try:
+                    all_payment_methods = stripe.PaymentMethod.list(
+                        customer=customer.id,
+                        limit=10
+                    )
                     
-                    # Only accept regular card type
-                    if pm.type == 'card':
-                        # Make sure card is not wallet-connected
-                        if hasattr(pm, 'card') and hasattr(pm.card, 'wallet'):
-                            wallet_type = pm.card.wallet.get('type') if pm.card.wallet else None
-                            if wallet_type in ['google_pay', 'apple_pay', 'link']:
-                                continue
+                    # Look for a valid card payment method (not Link/GPay/APay)
+                    for pm in all_payment_methods.data:
+                        # SKIP Link, Google Pay, Apple Pay
+                        if pm.type in ['link', 'google_pay', 'apple_pay']:
+                            continue
+                        if hasattr(pm, 'link') and pm.link:
+                            continue
                         
-                        # Valid card found!
+                        # Only accept regular card type
+                        if pm.type == 'card':
+                            # Make sure card is not wallet-connected
+                            if hasattr(pm, 'card') and hasattr(pm.card, 'wallet'):
+                                wallet_type = pm.card.wallet.get('type') if pm.card.wallet else None
+                                if wallet_type in ['google_pay', 'apple_pay', 'link']:
+                                    continue
+                            
+                            # Valid card found!
+                            return {
+                                'id': customer.id,
+                                'email': customer.email or 'No email',
+                                'name': customer.name or 'No name'
+                            }
+                    
+                    # Fallback: Check for default source
+                    if customer.default_source:
                         return {
                             'id': customer.id,
                             'email': customer.email or 'No email',
                             'name': customer.name or 'No name'
                         }
-                
-                # Fallback: Check for default source
-                if customer.default_source:
-                    return {
-                        'id': customer.id,
-                        'email': customer.email or 'No email',
-                        'name': customer.name or 'No name'
-                    }
-                
-                # Fallback: Check invoice settings
-                if customer.invoice_settings and customer.invoice_settings.default_payment_method:
-                    try:
-                        pm = stripe.PaymentMethod.retrieve(customer.invoice_settings.default_payment_method)
-                        if pm.type == 'card' and pm.type not in ['link', 'google_pay', 'apple_pay']:
-                            if not (hasattr(pm, 'link') and pm.link):
-                                return {
-                                    'id': customer.id,
-                                    'email': customer.email or 'No email',
-                                    'name': customer.name or 'No name'
-                                }
-                    except:
-                        pass
-                
-                return None
-            except:
-                return None
-        
-        # Filter customers in PARALLEL (SUPER FAST!)
-        customers_to_charge = []
-        with ThreadPoolExecutor(max_workers=50) as executor:
-            future_to_customer = {
-                executor.submit(check_customer_valid, customer): customer 
-                for customer in customer_list
-            }
+                    
+                    # Fallback: Check invoice settings
+                    if customer.invoice_settings and customer.invoice_settings.default_payment_method:
+                        try:
+                            pm = stripe.PaymentMethod.retrieve(customer.invoice_settings.default_payment_method)
+                            if pm.type == 'card' and pm.type not in ['link', 'google_pay', 'apple_pay']:
+                                if not (hasattr(pm, 'link') and pm.link):
+                                    return {
+                                        'id': customer.id,
+                                        'email': customer.email or 'No email',
+                                        'name': customer.name or 'No name'
+                                    }
+                        except:
+                            pass
+                    
+                    return None
+                except:
+                    return None
             
-            for future in as_completed(future_to_customer):
-                result = future.result()
-                if result:
-                    customers_to_charge.append(result)
+            # Filter customers in PARALLEL (SUPER FAST!)
+            customers_to_charge = []
+            with ThreadPoolExecutor(max_workers=50) as executor:
+                future_to_customer = {
+                    executor.submit(check_customer_valid, customer): customer 
+                    for customer in customer_list
+                }
+                
+                for future in as_completed(future_to_customer):
+                    result = future.result()
+                    if result:
+                        customers_to_charge.append(result)
         
         # Apply customer limit
         if max_customers > 0 and len(customers_to_charge) > max_customers:
