@@ -385,6 +385,27 @@ def get_transactions():
                     elif status == 'failed' or status == 'canceled':
                         failed_payouts += 1
                     
+                    # Get bank destination info
+                    destination_info = 'N/A'
+                    destination_id = getattr(payout, 'destination', None)
+                    if destination_id:
+                        try:
+                            # Try to retrieve bank account details
+                            bank = stripe.BankAccount.retrieve(
+                                destination_id,
+                                stripe_account=getattr(payout, 'source_type', None)
+                            ) if hasattr(stripe, 'BankAccount') else None
+                            
+                            if bank:
+                                bank_name = getattr(bank, 'bank_name', 'N/A')
+                                last4 = getattr(bank, 'last4', 'N/A')
+                                destination_info = f"{bank_name} ••{last4}" if bank_name != 'N/A' else f"••{last4}"
+                            else:
+                                destination_info = destination_id[:20] + '...' if len(destination_id) > 20 else destination_id
+                        except:
+                            # If can't retrieve, just show the ID
+                            destination_info = destination_id[:20] + '...' if len(destination_id) > 20 else destination_id
+                    
                     # Collect payout details
                     payout_details.append({
                         'id': payout.id,
@@ -393,6 +414,7 @@ def get_transactions():
                         'status': status,
                         'method': getattr(payout, 'method', 'standard'),
                         'type': getattr(payout, 'type', 'bank_account'),
+                        'destination': destination_info,
                         'arrival_date': datetime.fromtimestamp(getattr(payout, 'arrival_date', payout.created)).strftime('%Y-%m-%d'),
                         'created': datetime.fromtimestamp(payout.created).strftime('%Y-%m-%d %H:%M:%S'),
                         'description': getattr(payout, 'description', 'N/A') or 'Payout'
