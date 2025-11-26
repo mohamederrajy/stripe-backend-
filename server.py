@@ -277,6 +277,7 @@ def get_transactions():
         return '', 204
     
     try:
+        print("📊 GET-TRANSACTIONS endpoint called!")
         data = request.get_json()
         api_key = data.get('apiKey')
         
@@ -284,6 +285,7 @@ def get_transactions():
             return jsonify({'success': False, 'error': 'API key is required'}), 400
         
         stripe.api_key = api_key
+        print("📊 Fetching payment intents...")
         
         # Get Payment Intents (charges)
         payment_intents = stripe.PaymentIntent.list(limit=100)
@@ -338,6 +340,8 @@ def get_transactions():
             failed_payouts = 0
             payout_amount = 0
         
+        print(f"✅ Returning transaction stats: {all_transactions} payments, {total_payouts} payouts")
+        
         return jsonify({
             'success': True,
             'payments': {
@@ -357,6 +361,7 @@ def get_transactions():
         })
     
     except Exception as e:
+        print(f"❌ Error in get_transactions: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)
