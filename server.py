@@ -287,8 +287,8 @@ def get_transactions():
         stripe.api_key = api_key
         print("📊 Fetching payment intents...")
         
-        # Get Payment Intents (charges)
-        payment_intents = stripe.PaymentIntent.list(limit=100)
+        # Get Payment Intents (charges) - Limit to 50 for speed
+        payment_intents = stripe.PaymentIntent.list(limit=50)
         
         all_transactions = 0
         succeeded = 0
@@ -297,7 +297,8 @@ def get_transactions():
         disputed = 0
         payment_details = []
         
-        for pi in payment_intents.auto_paging_iter():
+        # Use .data to avoid auto-paging (faster, only fetches limit)
+        for pi in payment_intents.data:
             try:
                 all_transactions += 1
                 
@@ -329,15 +330,9 @@ def get_transactions():
                     payment_method_brand = getattr(payment_method_details.card, 'brand', 'N/A').upper()
                     payment_method_last4 = getattr(payment_method_details.card, 'last4', 'N/A')
                 
-                # Get customer info
+                # Get customer info (ID only - don't retrieve to avoid slowdown)
                 customer_id = getattr(pi, 'customer', 'N/A')
-                customer_email = 'N/A'
-                if customer_id and customer_id != 'N/A':
-                    try:
-                        cust = stripe.Customer.retrieve(customer_id)
-                        customer_email = getattr(cust, 'email', 'N/A')
-                    except:
-                        pass
+                customer_display = customer_id if customer_id and customer_id != 'N/A' else 'N/A'
                 
                 # Get decline reason if failed
                 decline_reason = 'N/A'
@@ -353,7 +348,7 @@ def get_transactions():
                     'status': status,
                     'payment_method': f"{payment_method_brand} •••• {payment_method_last4}" if payment_method_last4 != 'N/A' else payment_method_type,
                     'description': getattr(pi, 'description', 'N/A') or 'No description',
-                    'customer': customer_email,
+                    'customer': customer_display,  # Show customer ID instead of email for speed
                     'date': datetime.fromtimestamp(pi.created).strftime('%Y-%m-%d %H:%M:%S'),
                     'decline_reason': decline_reason
                 })
@@ -362,9 +357,9 @@ def get_transactions():
                 print(f"⚠️ Error processing payment intent: {str(pi_error)}")
                 continue
         
-        # Get Payouts
+        # Get Payouts (limit to 50 for speed)
         try:
-            payouts = stripe.Payout.list(limit=100)
+            payouts = stripe.Payout.list(limit=50)
             
             total_payouts = 0
             paid_payouts = 0
@@ -372,7 +367,7 @@ def get_transactions():
             failed_payouts = 0
             payout_amount = 0
             
-            for payout in payouts.auto_paging_iter():
+            for payout in payouts.data:  # Use .data instead of auto_paging_iter for speed
                 try:
                     total_payouts += 1
                     
