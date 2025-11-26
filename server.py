@@ -297,20 +297,28 @@ def get_transactions():
         disputed = 0
         
         for pi in payment_intents.auto_paging_iter():
-            all_transactions += 1
-            
-            if pi.status == 'succeeded':
-                succeeded += 1
-            elif pi.status == 'canceled' or pi.status == 'requires_payment_method':
-                failed += 1
-            
-            # Check for refunds
-            if pi.amount_refunded and pi.amount_refunded > 0:
-                refunded += 1
-            
-            # Check for disputes
-            if hasattr(pi, 'disputed') and pi.disputed:
-                disputed += 1
+            try:
+                all_transactions += 1
+                
+                # Check status
+                status = getattr(pi, 'status', 'unknown')
+                if status == 'succeeded':
+                    succeeded += 1
+                elif status == 'canceled' or status == 'requires_payment_method':
+                    failed += 1
+                
+                # Check for refunds (safely)
+                amount_refunded = getattr(pi, 'amount_refunded', 0)
+                if amount_refunded and amount_refunded > 0:
+                    refunded += 1
+                
+                # Check for disputes (safely)
+                is_disputed = getattr(pi, 'disputed', False)
+                if is_disputed:
+                    disputed += 1
+            except Exception as pi_error:
+                print(f"⚠️ Error processing payment intent: {str(pi_error)}")
+                continue
         
         # Get Payouts
         try:
@@ -323,15 +331,24 @@ def get_transactions():
             payout_amount = 0
             
             for payout in payouts.auto_paging_iter():
-                total_payouts += 1
-                payout_amount += payout.amount / 100  # Convert from cents
-                
-                if payout.status == 'paid':
-                    paid_payouts += 1
-                elif payout.status == 'pending' or payout.status == 'in_transit':
-                    pending_payouts += 1
-                elif payout.status == 'failed' or payout.status == 'canceled':
-                    failed_payouts += 1
+                try:
+                    total_payouts += 1
+                    
+                    # Safely get amount
+                    amount = getattr(payout, 'amount', 0)
+                    payout_amount += amount / 100  # Convert from cents
+                    
+                    # Safely get status
+                    status = getattr(payout, 'status', 'unknown')
+                    if status == 'paid':
+                        paid_payouts += 1
+                    elif status == 'pending' or status == 'in_transit':
+                        pending_payouts += 1
+                    elif status == 'failed' or status == 'canceled':
+                        failed_payouts += 1
+                except Exception as payout_error:
+                    print(f"⚠️ Error processing payout: {str(payout_error)}")
+                    continue
         except:
             # Payouts might not be available for all accounts
             total_payouts = 0
