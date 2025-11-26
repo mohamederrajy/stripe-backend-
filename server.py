@@ -341,11 +341,19 @@ def get_transactions():
                     if last_payment_error:
                         decline_reason = getattr(last_payment_error, 'message', 'Unknown error')
                 
+                # Check if payment has been refunded and update status
+                display_status = status
+                if amount_refunded and amount_refunded > 0:
+                    if amount_refunded >= pi.amount:
+                        display_status = 'refunded'  # Fully refunded
+                    else:
+                        display_status = 'partially_refunded'  # Partially refunded
+                
                 payment_details.append({
                     'id': pi.id,
                     'amount': pi.amount / 100,  # Convert from cents
                     'currency': getattr(pi, 'currency', 'usd').upper(),
-                    'status': status,
+                    'status': display_status,  # Use updated status that reflects refunds
                     'payment_method': f"{payment_method_brand} •••• {payment_method_last4}" if payment_method_last4 != 'N/A' else payment_method_type,
                     'description': getattr(pi, 'description', 'N/A') or 'No description',
                     'customer': customer_display,  # Show customer ID instead of email for speed
