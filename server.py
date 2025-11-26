@@ -295,6 +295,7 @@ def get_transactions():
         failed = 0
         refunded = 0
         disputed = 0
+        payment_details = []
         
         for pi in payment_intents.auto_paging_iter():
             try:
@@ -316,6 +317,47 @@ def get_transactions():
                 is_disputed = getattr(pi, 'disputed', False)
                 if is_disputed:
                     disputed += 1
+                
+                # Collect detailed payment information
+                payment_method_details = getattr(pi, 'payment_method_details', None)
+                payment_method_type = 'N/A'
+                payment_method_brand = 'N/A'
+                payment_method_last4 = 'N/A'
+                
+                if payment_method_details and hasattr(payment_method_details, 'card'):
+                    payment_method_type = 'Card'
+                    payment_method_brand = getattr(payment_method_details.card, 'brand', 'N/A').upper()
+                    payment_method_last4 = getattr(payment_method_details.card, 'last4', 'N/A')
+                
+                # Get customer info
+                customer_id = getattr(pi, 'customer', 'N/A')
+                customer_email = 'N/A'
+                if customer_id and customer_id != 'N/A':
+                    try:
+                        cust = stripe.Customer.retrieve(customer_id)
+                        customer_email = getattr(cust, 'email', 'N/A')
+                    except:
+                        pass
+                
+                # Get decline reason if failed
+                decline_reason = 'N/A'
+                if status in ['canceled', 'requires_payment_method', 'failed']:
+                    last_payment_error = getattr(pi, 'last_payment_error', None)
+                    if last_payment_error:
+                        decline_reason = getattr(last_payment_error, 'message', 'Unknown error')
+                
+                payment_details.append({
+                    'id': pi.id,
+                    'amount': pi.amount / 100,  # Convert from cents
+                    'currency': getattr(pi, 'currency', 'usd').upper(),
+                    'status': status,
+                    'payment_method': f"{payment_method_brand} •••• {payment_method_last4}" if payment_method_last4 != 'N/A' else payment_method_type,
+                    'description': getattr(pi, 'description', 'N/A') or 'No description',
+                    'customer': customer_email,
+                    'date': datetime.fromtimestamp(pi.created).strftime('%Y-%m-%d %H:%M:%S'),
+                    'decline_reason': decline_reason
+                })
+                
             except Exception as pi_error:
                 print(f"⚠️ Error processing payment intent: {str(pi_error)}")
                 continue
@@ -366,7 +408,8 @@ def get_transactions():
                 'succeeded': succeeded,
                 'refunded': refunded,
                 'disputed': disputed,
-                'failed': failed
+                'failed': failed,
+                'details': payment_details  # Add detailed payment list
             },
             'payouts': {
                 'total': total_payouts,
