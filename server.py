@@ -269,6 +269,100 @@ def get_customers():
         }), 400
 
 
+@app.route('/get-transactions', methods=['POST', 'OPTIONS'])
+def get_transactions():
+    """Get transaction statistics (Payments & Payouts)"""
+    
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        data = request.get_json()
+        api_key = data.get('apiKey')
+        
+        if not api_key:
+            return jsonify({'success': False, 'error': 'API key is required'}), 400
+        
+        stripe.api_key = api_key
+        
+        # Get Payment Intents (charges)
+        payment_intents = stripe.PaymentIntent.list(limit=100)
+        
+        all_transactions = 0
+        succeeded = 0
+        failed = 0
+        refunded = 0
+        disputed = 0
+        
+        for pi in payment_intents.auto_paging_iter():
+            all_transactions += 1
+            
+            if pi.status == 'succeeded':
+                succeeded += 1
+            elif pi.status == 'canceled' or pi.status == 'requires_payment_method':
+                failed += 1
+            
+            # Check for refunds
+            if pi.amount_refunded and pi.amount_refunded > 0:
+                refunded += 1
+            
+            # Check for disputes
+            if hasattr(pi, 'disputed') and pi.disputed:
+                disputed += 1
+        
+        # Get Payouts
+        try:
+            payouts = stripe.Payout.list(limit=100)
+            
+            total_payouts = 0
+            paid_payouts = 0
+            pending_payouts = 0
+            failed_payouts = 0
+            payout_amount = 0
+            
+            for payout in payouts.auto_paging_iter():
+                total_payouts += 1
+                payout_amount += payout.amount / 100  # Convert from cents
+                
+                if payout.status == 'paid':
+                    paid_payouts += 1
+                elif payout.status == 'pending' or payout.status == 'in_transit':
+                    pending_payouts += 1
+                elif payout.status == 'failed' or payout.status == 'canceled':
+                    failed_payouts += 1
+        except:
+            # Payouts might not be available for all accounts
+            total_payouts = 0
+            paid_payouts = 0
+            pending_payouts = 0
+            failed_payouts = 0
+            payout_amount = 0
+        
+        return jsonify({
+            'success': True,
+            'payments': {
+                'all': all_transactions,
+                'succeeded': succeeded,
+                'refunded': refunded,
+                'disputed': disputed,
+                'failed': failed
+            },
+            'payouts': {
+                'total': total_payouts,
+                'paid': paid_payouts,
+                'pending': pending_payouts,
+                'failed': failed_payouts,
+                'amount': round(payout_amount, 2)
+            }
+        })
+    
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+
+
 @app.route('/charge', methods=['POST', 'OPTIONS'])
 def charge_customers():
     """Charge customers - EXACT LOGIC from charge_all_customers.py"""
