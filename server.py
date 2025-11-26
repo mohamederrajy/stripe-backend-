@@ -515,8 +515,30 @@ def get_overview():
         daily_gross = {}
         daily_net = {}
         
+        # First pass to detect account currency from charges
+        account_currency_from_charges = None
+        for charge in charges.auto_paging_iter():
+            charge_currency = getattr(charge, 'currency', 'usd').lower()
+            if charge.status == 'succeeded':
+                account_currency_from_charges = charge_currency
+                break
+        
+        # Reset iterator
+        if start_date > 0:
+            charges = stripe.Charge.list(limit=100, created={'gte': start_date})
+        else:
+            charges = stripe.Charge.list(limit=100)
+        
+        # Use detected currency or default to usd
+        detected_currency = account_currency_from_charges or 'usd'
+        
         for charge in charges.auto_paging_iter():
             try:
+                # Skip charges in different currencies
+                charge_currency = getattr(charge, 'currency', 'usd').lower()
+                if charge_currency != detected_currency:
+                    continue
+                
                 total_charges += 1
                 amount = charge.amount / 100
                 created_date = datetime.fromtimestamp(charge.created).strftime('%Y-%m-%d')
@@ -553,20 +575,25 @@ def get_overview():
                 print(f"⚠️ Error processing charge: {str(e)}")
                 continue
         
+        print(f"📊 Account currency: {detected_currency.upper()}")
+        
         print(f"📊 Processed {total_charges} charges, dispute_count: {dispute_count}")
         
-        # Get balance
+        # Get balance (filter by detected currency)
         try:
             balance = stripe.Balance.retrieve()
-            available_balance = sum([bal['amount'] / 100 for bal in balance.available])
-            pending_balance = sum([bal['amount'] / 100 for bal in balance.pending])
-            print(f"💰 Balance: Available=${available_balance}, Pending=${pending_balance}")
+            
+            # Sum balance for the detected currency only
+            available_balance = sum([bal['amount'] / 100 for bal in balance.available if bal.get('currency', 'usd').lower() == detected_currency])
+            pending_balance = sum([bal['amount'] / 100 for bal in balance.pending if bal.get('currency', 'usd').lower() == detected_currency])
+            
+            print(f"💰 Balance ({detected_currency.upper()}): Available={available_balance}, Pending={pending_balance}")
         except Exception as e:
             print(f"⚠️ Balance error: {str(e)}")
             available_balance = 0
             pending_balance = 0
         
-        # Get next payout
+        # Get next payout (filter by detected currency)
         try:
             # Get all upcoming payouts (pending or in_transit)
             all_payouts = stripe.Payout.list(limit=10)
@@ -574,6 +601,11 @@ def get_overview():
             next_payout_date = 'N/A'
             
             for payout in all_payouts.data:
+                payout_currency = getattr(payout, 'currency', 'usd').lower()
+                # Only consider payouts in the same currency
+                if payout_currency != detected_currency:
+                    continue
+                    
                 status = getattr(payout, 'status', '')
                 if status in ['pending', 'in_transit']:
                     next_payout = getattr(payout, 'amount', 0) / 100
@@ -582,7 +614,7 @@ def get_overview():
                         next_payout_date = datetime.fromtimestamp(arrival).strftime('%Y-%m-%d')
                     break
             
-            print(f"📅 Next payout: ${next_payout} on {next_payout_date}")
+            print(f"📅 Next payout ({detected_currency.upper()}): {next_payout} on {next_payout_date}")
         except Exception as e:
             print(f"⚠️ Next payout error: {str(e)}")
             next_payout = 0
@@ -601,6 +633,7 @@ def get_overview():
         
         result_data = {
             'success': True,
+            'currency': detected_currency.upper(),
             'payments': {
                 'succeeded': round(succeeded_amount, 2),
                 'uncaptured': round(uncaptured_amount, 2),
