@@ -287,8 +287,8 @@ def get_transactions():
         stripe.api_key = api_key
         print("📊 Fetching payment intents...")
         
-        # Get Payment Intents (charges) - Limit to 50 for speed
-        payment_intents = stripe.PaymentIntent.list(limit=50)
+        # Get ALL Payment Intents (no limit)
+        payment_intents = stripe.PaymentIntent.list(limit=100)
         
         all_transactions = 0
         succeeded = 0
@@ -297,8 +297,8 @@ def get_transactions():
         disputed = 0
         payment_details = []
         
-        # Use .data to avoid auto-paging (faster, only fetches limit)
-        for pi in payment_intents.data:
+        # Get all payment intents
+        for pi in payment_intents.auto_paging_iter():
             try:
                 all_transactions += 1
                 
@@ -357,9 +357,10 @@ def get_transactions():
                 print(f"⚠️ Error processing payment intent: {str(pi_error)}")
                 continue
         
-        # Get Payouts (limit to 50 for speed)
+        # Get Payouts (get all)
+        payout_details = []
         try:
-            payouts = stripe.Payout.list(limit=50)
+            payouts = stripe.Payout.list(limit=100)
             
             total_payouts = 0
             paid_payouts = 0
@@ -367,7 +368,7 @@ def get_transactions():
             failed_payouts = 0
             payout_amount = 0
             
-            for payout in payouts.data:  # Use .data instead of auto_paging_iter for speed
+            for payout in payouts.auto_paging_iter():
                 try:
                     total_payouts += 1
                     
@@ -383,11 +384,26 @@ def get_transactions():
                         pending_payouts += 1
                     elif status == 'failed' or status == 'canceled':
                         failed_payouts += 1
+                    
+                    # Collect payout details
+                    payout_details.append({
+                        'id': payout.id,
+                        'amount': amount / 100,
+                        'currency': getattr(payout, 'currency', 'usd').upper(),
+                        'status': status,
+                        'method': getattr(payout, 'method', 'standard'),
+                        'type': getattr(payout, 'type', 'bank_account'),
+                        'arrival_date': datetime.fromtimestamp(getattr(payout, 'arrival_date', payout.created)).strftime('%Y-%m-%d'),
+                        'created': datetime.fromtimestamp(payout.created).strftime('%Y-%m-%d %H:%M:%S'),
+                        'description': getattr(payout, 'description', 'N/A') or 'Payout'
+                    })
+                    
                 except Exception as payout_error:
                     print(f"⚠️ Error processing payout: {str(payout_error)}")
                     continue
-        except:
+        except Exception as e:
             # Payouts might not be available for all accounts
+            print(f"⚠️ Payouts not available: {str(e)}")
             total_payouts = 0
             paid_payouts = 0
             pending_payouts = 0
@@ -404,14 +420,15 @@ def get_transactions():
                 'refunded': refunded,
                 'disputed': disputed,
                 'failed': failed,
-                'details': payment_details  # Add detailed payment list
+                'details': payment_details  # Detailed payment list
             },
             'payouts': {
                 'total': total_payouts,
                 'paid': paid_payouts,
                 'pending': pending_payouts,
                 'failed': failed_payouts,
-                'amount': round(payout_amount, 2)
+                'amount': round(payout_amount, 2),
+                'details': payout_details  # Detailed payout list
             }
         })
     
