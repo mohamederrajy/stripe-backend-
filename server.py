@@ -929,6 +929,76 @@ def charge_customers():
         }), 400
 
 
+@app.route('/refund', methods=['POST', 'OPTIONS'])
+def refund_payment():
+    """Refund a payment"""
+    
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        data = request.get_json()
+        api_key = data.get('apiKey')
+        payment_intent_id = data.get('paymentIntentId')
+        refund_amount = data.get('amount')  # Optional: partial refund
+        reason = data.get('reason', 'requested_by_customer')
+        
+        if not api_key:
+            return jsonify({'success': False, 'error': 'API key is required'}), 400
+        
+        if not payment_intent_id:
+            return jsonify({'success': False, 'error': 'Payment Intent ID is required'}), 400
+        
+        stripe.api_key = api_key
+        
+        print(f"💸 Refund request for: {payment_intent_id}")
+        
+        # Get the payment intent to find the charge
+        payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+        
+        # Get the charge ID from the payment intent
+        charge_id = None
+        if hasattr(payment_intent, 'latest_charge'):
+            charge_id = payment_intent.latest_charge
+        elif hasattr(payment_intent, 'charges') and payment_intent.charges.data:
+            charge_id = payment_intent.charges.data[0].id
+        
+        if not charge_id:
+            return jsonify({'success': False, 'error': 'No charge found for this payment'}), 400
+        
+        # Create refund
+        refund_params = {
+            'charge': charge_id,
+            'reason': reason
+        }
+        
+        # Add amount if partial refund
+        if refund_amount:
+            refund_params['amount'] = int(refund_amount * 100)  # Convert to cents
+        
+        refund = stripe.Refund.create(**refund_params)
+        
+        print(f"✅ Refund created: {refund.id}")
+        
+        return jsonify({
+            'success': True,
+            'refund': {
+                'id': refund.id,
+                'amount': refund.amount / 100,
+                'currency': refund.currency.upper(),
+                'status': refund.status,
+                'reason': refund.reason
+            }
+        })
+    
+    except Exception as e:
+        print(f"❌ Refund error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+
+
 # ============================================================
 # START SERVER
 # ============================================================
