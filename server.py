@@ -343,27 +343,10 @@ def get_transactions():
                 
                 # Check if payment has been refunded and update status
                 display_status = status
-                has_pending_refund = False
                 
-                # Check for pending refunds by examining the charge
-                try:
-                    if hasattr(pi, 'latest_charge') and pi.latest_charge:
-                        charge = stripe.Charge.retrieve(pi.latest_charge)
-                        
-                        # Check if charge has refunds
-                        if hasattr(charge, 'refunds') and charge.refunds.data:
-                            for refund in charge.refunds.data:
-                                refund_status = getattr(refund, 'status', '')
-                                if refund_status == 'pending':
-                                    has_pending_refund = True
-                                    break
-                except Exception as e:
-                    print(f"⚠️ Error checking refunds for {pi.id}: {str(e)}")
-                
-                # Set display status based on refund state
-                if has_pending_refund:
-                    display_status = 'refund_pending'  # Refund is processing
-                elif amount_refunded and amount_refunded > 0:
+                # Simple check: if amount_refunded exists but is still 0, refund might be pending
+                # If amount_refunded > 0, refund is complete
+                if amount_refunded and amount_refunded > 0:
                     if amount_refunded >= pi.amount:
                         display_status = 'refunded'  # Fully refunded
                     else:
