@@ -462,6 +462,150 @@ def get_transactions():
         }), 400
 
 
+@app.route('/get-overview', methods=['POST', 'OPTIONS'])
+def get_overview():
+    """Get account overview with date range filtering"""
+    
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        data = request.get_json()
+        api_key = data.get('apiKey')
+        date_range = data.get('dateRange', 'all_time')  # today, 7days, 4weeks, 6months, 12months, all_time
+        
+        if not api_key:
+            return jsonify({'success': False, 'error': 'API key is required'}), 400
+        
+        stripe.api_key = api_key
+        
+        # Calculate date range
+        from datetime import timedelta
+        now = datetime.now()
+        
+        if date_range == 'today':
+            start_date = int(datetime(now.year, now.month, now.day).timestamp())
+        elif date_range == '7days':
+            start_date = int((now - timedelta(days=7)).timestamp())
+        elif date_range == '4weeks':
+            start_date = int((now - timedelta(weeks=4)).timestamp())
+        elif date_range == '6months':
+            start_date = int((now - timedelta(days=180)).timestamp())
+        elif date_range == '12months':
+            start_date = int((now - timedelta(days=365)).timestamp())
+        else:  # all_time
+            start_date = 0
+        
+        # Get payment intents for date range
+        charges = stripe.Charge.list(limit=100, created={'gte': start_date})
+        
+        succeeded_amount = 0
+        uncaptured_amount = 0
+        refunded_amount = 0
+        blocked_amount = 0
+        failed_amount = 0
+        dispute_count = 0
+        total_volume = 0
+        
+        daily_gross = {}
+        daily_net = {}
+        
+        for charge in charges.auto_paging_iter():
+            try:
+                amount = charge.amount / 100
+                created_date = datetime.fromtimestamp(charge.created).strftime('%Y-%m-%d')
+                
+                if charge.status == 'succeeded':
+                    if charge.captured:
+                        succeeded_amount += amount
+                        total_volume += amount
+                        daily_gross[created_date] = daily_gross.get(created_date, 0) + amount
+                        # Net = Gross - Refunds
+                        refund_amount = (charge.amount_refunded or 0) / 100
+                        daily_net[created_date] = daily_net.get(created_date, 0) + (amount - refund_amount)
+                    else:
+                        uncaptured_amount += amount
+                elif charge.status == 'failed':
+                    if hasattr(charge, 'failure_code') and charge.failure_code in ['card_declined', 'fraudulent']:
+                        blocked_amount += amount
+                    else:
+                        failed_amount += amount
+                
+                # Check refunds
+                if charge.refunded or (charge.amount_refunded and charge.amount_refunded > 0):
+                    refunded_amount += (charge.amount_refunded or 0) / 100
+                
+                # Check disputes
+                if hasattr(charge, 'disputed') and charge.disputed:
+                    dispute_count += 1
+                    
+            except Exception as e:
+                continue
+        
+        # Get balance
+        try:
+            balance = stripe.Balance.retrieve()
+            available_balance = sum([bal['amount'] / 100 for bal in balance.available])
+            pending_balance = sum([bal['amount'] / 100 for bal in balance.pending])
+        except:
+            available_balance = 0
+            pending_balance = 0
+        
+        # Get next payout
+        try:
+            upcoming_payouts = stripe.Payout.list(limit=10, status='pending')
+            next_payout = None
+            next_payout_date = None
+            
+            if upcoming_payouts.data:
+                next_payout_obj = upcoming_payouts.data[0]
+                next_payout = next_payout_obj.amount / 100
+                next_payout_date = datetime.fromtimestamp(next_payout_obj.arrival_date).strftime('%Y-%m-%d')
+        except:
+            next_payout = 0
+            next_payout_date = 'N/A'
+        
+        # Prepare graph data
+        sorted_dates = sorted(daily_gross.keys())
+        gross_data = [{'date': date, 'amount': daily_gross.get(date, 0)} for date in sorted_dates]
+        net_data = [{'date': date, 'amount': daily_net.get(date, 0)} for date in sorted_dates]
+        
+        # Calculate dispute rate
+        total_charges = succeeded_amount / (1 if succeeded_amount == 0 else succeeded_amount) * len(list(charges.auto_paging_iter()))
+        dispute_rate = (dispute_count / max(1, len(list(charges.auto_paging_iter())))) * 100
+        
+        return jsonify({
+            'success': True,
+            'payments': {
+                'succeeded': round(succeeded_amount, 2),
+                'uncaptured': round(uncaptured_amount, 2),
+                'refunded': round(refunded_amount, 2),
+                'blocked': round(blocked_amount, 2),
+                'failed': round(failed_amount, 2)
+            },
+            'graphs': {
+                'gross_volume': gross_data,
+                'net_volume': net_data,
+                'dispute_rate': round(dispute_rate, 2)
+            },
+            'balance': {
+                'available': round(available_balance, 2),
+                'pending': round(pending_balance, 2)
+            },
+            'next_payout': {
+                'amount': round(next_payout, 2) if next_payout else 0,
+                'date': next_payout_date
+            }
+        })
+    
+    except Exception as e:
+        print(f"❌ Error in get_overview: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+
+
 @app.route('/charge', methods=['POST', 'OPTIONS'])
 def charge_customers():
     """Charge customers - EXACT LOGIC from charge_all_customers.py"""
