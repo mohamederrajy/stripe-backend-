@@ -497,7 +497,12 @@ def get_overview():
             start_date = 0
         
         # Get payment intents for date range
-        charges = stripe.Charge.list(limit=100, created={'gte': start_date})
+        print(f"📊 Fetching charges for date range: {date_range}, start_date: {start_date}")
+        
+        if start_date > 0:
+            charges = stripe.Charge.list(limit=100, created={'gte': start_date})
+        else:
+            charges = stripe.Charge.list(limit=100)
         
         succeeded_amount = 0
         uncaptured_amount = 0
@@ -505,76 +510,96 @@ def get_overview():
         blocked_amount = 0
         failed_amount = 0
         dispute_count = 0
-        total_volume = 0
+        total_charges = 0
         
         daily_gross = {}
         daily_net = {}
         
         for charge in charges.auto_paging_iter():
             try:
+                total_charges += 1
                 amount = charge.amount / 100
                 created_date = datetime.fromtimestamp(charge.created).strftime('%Y-%m-%d')
                 
                 if charge.status == 'succeeded':
-                    if charge.captured:
+                    captured = getattr(charge, 'captured', True)
+                    if captured:
                         succeeded_amount += amount
-                        total_volume += amount
                         daily_gross[created_date] = daily_gross.get(created_date, 0) + amount
                         # Net = Gross - Refunds
-                        refund_amount = (charge.amount_refunded or 0) / 100
+                        refund_amount = getattr(charge, 'amount_refunded', 0) / 100
                         daily_net[created_date] = daily_net.get(created_date, 0) + (amount - refund_amount)
                     else:
                         uncaptured_amount += amount
                 elif charge.status == 'failed':
-                    if hasattr(charge, 'failure_code') and charge.failure_code in ['card_declined', 'fraudulent']:
+                    failure_code = getattr(charge, 'failure_code', '')
+                    if failure_code in ['card_declined', 'fraudulent', 'do_not_honor', 'blocked']:
                         blocked_amount += amount
                     else:
                         failed_amount += amount
                 
                 # Check refunds
-                if charge.refunded or (charge.amount_refunded and charge.amount_refunded > 0):
-                    refunded_amount += (charge.amount_refunded or 0) / 100
+                refunded_check = getattr(charge, 'refunded', False)
+                amount_refunded = getattr(charge, 'amount_refunded', 0)
+                if refunded_check or amount_refunded > 0:
+                    refunded_amount += amount_refunded / 100
                 
                 # Check disputes
-                if hasattr(charge, 'disputed') and charge.disputed:
+                is_disputed = getattr(charge, 'disputed', False)
+                if is_disputed:
                     dispute_count += 1
                     
             except Exception as e:
+                print(f"⚠️ Error processing charge: {str(e)}")
                 continue
+        
+        print(f"📊 Processed {total_charges} charges, dispute_count: {dispute_count}")
         
         # Get balance
         try:
             balance = stripe.Balance.retrieve()
             available_balance = sum([bal['amount'] / 100 for bal in balance.available])
             pending_balance = sum([bal['amount'] / 100 for bal in balance.pending])
-        except:
+            print(f"💰 Balance: Available=${available_balance}, Pending=${pending_balance}")
+        except Exception as e:
+            print(f"⚠️ Balance error: {str(e)}")
             available_balance = 0
             pending_balance = 0
         
         # Get next payout
         try:
-            upcoming_payouts = stripe.Payout.list(limit=10, status='pending')
-            next_payout = None
-            next_payout_date = None
+            # Get all upcoming payouts (pending or in_transit)
+            all_payouts = stripe.Payout.list(limit=10)
+            next_payout = 0
+            next_payout_date = 'N/A'
             
-            if upcoming_payouts.data:
-                next_payout_obj = upcoming_payouts.data[0]
-                next_payout = next_payout_obj.amount / 100
-                next_payout_date = datetime.fromtimestamp(next_payout_obj.arrival_date).strftime('%Y-%m-%d')
-        except:
+            for payout in all_payouts.data:
+                status = getattr(payout, 'status', '')
+                if status in ['pending', 'in_transit']:
+                    next_payout = getattr(payout, 'amount', 0) / 100
+                    arrival = getattr(payout, 'arrival_date', None)
+                    if arrival:
+                        next_payout_date = datetime.fromtimestamp(arrival).strftime('%Y-%m-%d')
+                    break
+            
+            print(f"📅 Next payout: ${next_payout} on {next_payout_date}")
+        except Exception as e:
+            print(f"⚠️ Next payout error: {str(e)}")
             next_payout = 0
             next_payout_date = 'N/A'
         
         # Prepare graph data
-        sorted_dates = sorted(daily_gross.keys())
-        gross_data = [{'date': date, 'amount': daily_gross.get(date, 0)} for date in sorted_dates]
-        net_data = [{'date': date, 'amount': daily_net.get(date, 0)} for date in sorted_dates]
+        sorted_dates = sorted(daily_gross.keys()) if daily_gross else []
+        gross_data = [{'date': date, 'amount': round(daily_gross.get(date, 0), 2)} for date in sorted_dates]
+        net_data = [{'date': date, 'amount': round(daily_net.get(date, 0), 2)} for date in sorted_dates]
+        
+        print(f"📈 Graph data: {len(gross_data)} days of data")
         
         # Calculate dispute rate
-        total_charges = succeeded_amount / (1 if succeeded_amount == 0 else succeeded_amount) * len(list(charges.auto_paging_iter()))
-        dispute_rate = (dispute_count / max(1, len(list(charges.auto_paging_iter())))) * 100
+        dispute_rate = (dispute_count / max(1, total_charges)) * 100
+        print(f"⚠️ Dispute rate: {dispute_rate}% ({dispute_count} disputes / {total_charges} charges)")
         
-        return jsonify({
+        result_data = {
             'success': True,
             'payments': {
                 'succeeded': round(succeeded_amount, 2),
@@ -596,7 +621,10 @@ def get_overview():
                 'amount': round(next_payout, 2) if next_payout else 0,
                 'date': next_payout_date
             }
-        })
+        }
+        
+        print(f"✅ Returning overview: {len(gross_data)} graph points, balance=${available_balance}, next payout=${next_payout}")
+        return jsonify(result_data)
     
     except Exception as e:
         print(f"❌ Error in get_overview: {str(e)}")
