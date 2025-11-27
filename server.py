@@ -42,6 +42,59 @@ def health():
     })
 
 
+@app.route('/get-business-info', methods=['POST', 'OPTIONS'])
+def get_business_info():
+    """Get Stripe account/business information"""
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        data = request.get_json()
+        api_key = data.get('apiKey')
+        
+        if not api_key:
+            return jsonify({'success': False, 'error': 'API key is required'}), 400
+        
+        stripe.api_key = api_key
+        
+        # Get account information
+        account = stripe.Account.retrieve()
+        
+        # Get balance
+        balance = stripe.Balance.retrieve()
+        available_balance = sum([bal['amount'] / 100 for bal in balance.available]) if balance.available else 0
+        pending_balance = sum([bal['amount'] / 100 for bal in balance.pending]) if balance.pending else 0
+        
+        # Extract account details
+        business_name = getattr(account, 'business_profile', {}).get('name', 'N/A') if hasattr(account, 'business_profile') else 'N/A'
+        country = getattr(account, 'country', 'N/A')
+        email = getattr(account, 'email', 'N/A')
+        account_type = getattr(account, 'type', 'N/A')
+        charges_enabled = getattr(account, 'charges_enabled', False)
+        payouts_enabled = getattr(account, 'payouts_enabled', False)
+        default_currency = getattr(account, 'default_currency', 'usd').upper()
+        
+        return jsonify({
+            'success': True,
+            'business_name': business_name,
+            'country': country,
+            'email': email,
+            'account_type': account_type,
+            'charges_enabled': charges_enabled,
+            'payouts_enabled': payouts_enabled,
+            'default_currency': default_currency,
+            'available_balance': round(available_balance, 2),
+            'pending_balance': round(pending_balance, 2)
+        })
+    
+    except Exception as e:
+        print(f"❌ Error fetching business info: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+
+
 @app.route('/validate-key', methods=['POST', 'OPTIONS'])
 def validate_key():
     """Validate Stripe API key"""
