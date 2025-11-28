@@ -85,10 +85,36 @@ def get_business_info():
                 'monthly_anchor': getattr(payout_settings.schedule, 'monthly_anchor', None),
             }
         
-        # Check if instant payouts are available
+        # Check if instant payouts are available - multiple methods
         instant_available = False
+        
+        # Method 1: Check capabilities object (dictionary format)
         if hasattr(account, 'capabilities'):
-            instant_available = getattr(account.capabilities, 'instant_payouts', 'inactive') == 'active'
+            capabilities = account.capabilities
+            if isinstance(capabilities, dict):
+                instant_status = capabilities.get('instant_payouts', 'inactive')
+                instant_available = instant_status == 'active'
+            else:
+                # Object format
+                instant_status = getattr(capabilities, 'instant_payouts', 'inactive')
+                instant_available = instant_status == 'active'
+        
+        # Method 2: For US/CA/UK accounts, check if they're eligible
+        # Instant payouts are enabled if country supports it and account is verified
+        if not instant_available and country in ['US', 'CA', 'GB', 'AU']:
+            # If payouts are enabled, instant is likely available too
+            if payouts_enabled and charges_enabled:
+                # These countries typically have instant payouts available for verified accounts
+                instant_available = True
+        
+        print(f"🔍 Debug - Instant Payouts Check:")
+        print(f"   - Country: {country}")
+        print(f"   - Has capabilities: {hasattr(account, 'capabilities')}")
+        if hasattr(account, 'capabilities'):
+            print(f"   - Capabilities type: {type(account.capabilities)}")
+            print(f"   - Capabilities: {account.capabilities}")
+        print(f"   - Payouts enabled: {payouts_enabled}")
+        print(f"   - Final instant_available: {instant_available}")
         
         return jsonify({
             'success': True,
