@@ -74,6 +74,22 @@ def get_business_info():
         payouts_enabled = getattr(account, 'payouts_enabled', False)
         default_currency = getattr(account, 'default_currency', 'usd').upper()
         
+        # Get payout schedule information
+        payout_schedule = {}
+        if hasattr(account, 'settings') and hasattr(account.settings, 'payouts'):
+            payout_settings = account.settings.payouts
+            payout_schedule = {
+                'interval': getattr(payout_settings.schedule, 'interval', 'manual'),
+                'delay_days': getattr(payout_settings.schedule, 'delay_days', 0),
+                'weekly_anchor': getattr(payout_settings.schedule, 'weekly_anchor', None),
+                'monthly_anchor': getattr(payout_settings.schedule, 'monthly_anchor', None),
+            }
+        
+        # Check if instant payouts are available
+        instant_available = False
+        if hasattr(account, 'capabilities'):
+            instant_available = getattr(account.capabilities, 'instant_payouts', 'inactive') == 'active'
+        
         return jsonify({
             'success': True,
             'business_name': business_name,
@@ -84,7 +100,9 @@ def get_business_info():
             'payouts_enabled': payouts_enabled,
             'default_currency': default_currency,
             'available_balance': round(available_balance, 2),
-            'pending_balance': round(pending_balance, 2)
+            'pending_balance': round(pending_balance, 2),
+            'payout_schedule': payout_schedule,
+            'instant_payouts_available': instant_available
         })
     
     except Exception as e:
