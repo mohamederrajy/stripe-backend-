@@ -120,12 +120,11 @@ def get_business_info():
         else:
             print(f"   - instant_payouts NOT in capabilities dict")
         
-        # Fallback: If not explicitly listed and account is in a supported country with payouts enabled
-        # assume instant payouts are available (since many accounts have it but it's not in capabilities API)
+        # Fallback: For supported countries, instant payouts are typically available
+        # (Stripe doesn't always list this in capabilities API response)
         if not instant_available and country in ['US', 'CA', 'GB', 'AU', 'SG', 'NZ', 'IE']:
-            if payouts_enabled and charges_enabled:
-                print(f"   - Using country-based detection for {country}")
-                instant_available = True
+            print(f"   - Country {country} supports instant payouts - marking as available")
+            instant_available = True
         
         print(f"   - Final instant_available: {instant_available}")
         
