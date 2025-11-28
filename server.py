@@ -85,35 +85,48 @@ def get_business_info():
                 'monthly_anchor': getattr(payout_settings.schedule, 'monthly_anchor', None),
             }
         
-        # Check if instant payouts are available - multiple methods
+        # Check if instant payouts are available
         instant_available = False
         
-        # Method 1: Check capabilities object (dictionary format)
+        # First, try to get all capabilities as dict
+        capabilities_dict = {}
         if hasattr(account, 'capabilities'):
             capabilities = account.capabilities
+            
+            # Convert to dict for easier checking
             if isinstance(capabilities, dict):
-                instant_status = capabilities.get('instant_payouts', 'inactive')
-                instant_available = instant_status == 'active'
+                capabilities_dict = capabilities
             else:
-                # Object format
-                instant_status = getattr(capabilities, 'instant_payouts', 'inactive')
-                instant_available = instant_status == 'active'
-        
-        # Method 2: For US/CA/UK accounts, check if they're eligible
-        # Instant payouts are enabled if country supports it and account is verified
-        if not instant_available and country in ['US', 'CA', 'GB', 'AU']:
-            # If payouts are enabled, instant is likely available too
-            if payouts_enabled and charges_enabled:
-                # These countries typically have instant payouts available for verified accounts
-                instant_available = True
+                # It's a Stripe object, convert to dict
+                try:
+                    capabilities_dict = dict(capabilities)
+                except:
+                    # Try to access as object attributes
+                    if hasattr(capabilities, '__dict__'):
+                        capabilities_dict = capabilities.__dict__
         
         print(f"🔍 Debug - Instant Payouts Check:")
         print(f"   - Country: {country}")
-        print(f"   - Has capabilities: {hasattr(account, 'capabilities')}")
-        if hasattr(account, 'capabilities'):
-            print(f"   - Capabilities type: {type(account.capabilities)}")
-            print(f"   - Capabilities: {account.capabilities}")
         print(f"   - Payouts enabled: {payouts_enabled}")
+        print(f"   - Charges enabled: {charges_enabled}")
+        print(f"   - Has capabilities: {hasattr(account, 'capabilities')}")
+        print(f"   - ALL Capabilities: {capabilities_dict}")
+        
+        # Check for instant_payouts capability
+        if 'instant_payouts' in capabilities_dict:
+            instant_status = capabilities_dict.get('instant_payouts', 'inactive')
+            instant_available = instant_status == 'active'
+            print(f"   - instant_payouts found: {instant_status}")
+        else:
+            print(f"   - instant_payouts NOT in capabilities dict")
+        
+        # Fallback: If not explicitly listed and account is in a supported country with payouts enabled
+        # assume instant payouts are available (since many accounts have it but it's not in capabilities API)
+        if not instant_available and country in ['US', 'CA', 'GB', 'AU', 'SG', 'NZ', 'IE']:
+            if payouts_enabled and charges_enabled:
+                print(f"   - Using country-based detection for {country}")
+                instant_available = True
+        
         print(f"   - Final instant_available: {instant_available}")
         
         return jsonify({
