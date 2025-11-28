@@ -110,21 +110,18 @@ def get_business_info():
         print(f"   - Payouts enabled: {payouts_enabled}")
         print(f"   - Charges enabled: {charges_enabled}")
         print(f"   - Has capabilities: {hasattr(account, 'capabilities')}")
-        print(f"   - ALL Capabilities: {capabilities_dict}")
+        print(f"   - ALL Capabilities keys: {list(capabilities_dict.keys()) if capabilities_dict else 'None'}")
         
-        # Check for instant_payouts capability
+        # Check for instant_payouts capability - ONLY use real Stripe data
         if 'instant_payouts' in capabilities_dict:
             instant_status = capabilities_dict.get('instant_payouts', 'inactive')
             instant_available = instant_status == 'active'
-            print(f"   - instant_payouts found: {instant_status}")
+            print(f"   ✓ instant_payouts found in capabilities: {instant_status}")
+            print(f"   - Setting instant_available to: {instant_available}")
         else:
-            print(f"   - instant_payouts NOT in capabilities dict")
-        
-        # Fallback: For supported countries, instant payouts are typically available
-        # (Stripe doesn't always list this in capabilities API response)
-        if not instant_available and country in ['US', 'CA', 'GB', 'AU', 'SG', 'NZ', 'IE']:
-            print(f"   - Country {country} supports instant payouts - marking as available")
-            instant_available = True
+            print(f"   ✗ instant_payouts NOT in capabilities dict")
+            print(f"   - Full capabilities: {capabilities_dict}")
+            instant_available = False
         
         print(f"   - Final instant_available: {instant_available}")
         
