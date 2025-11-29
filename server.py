@@ -110,17 +110,22 @@ def get_business_info():
         print(f"   - Payouts enabled: {payouts_enabled}")
         print(f"   - Charges enabled: {charges_enabled}")
         print(f"   - Has capabilities: {hasattr(account, 'capabilities')}")
-        print(f"   - ALL Capabilities keys: {list(capabilities_dict.keys()) if capabilities_dict else 'None'}")
+        
+        # Try to get raw capabilities
+        if hasattr(account, 'capabilities'):
+            print(f"   - Raw capabilities object type: {type(account.capabilities)}")
+            print(f"   - Raw capabilities dir: {[attr for attr in dir(account.capabilities) if not attr.startswith('_')]}")
+            
+        print(f"   - Capabilities dict keys: {list(capabilities_dict.keys()) if capabilities_dict else 'None'}")
+        print(f"   - Full capabilities dict: {capabilities_dict}")
         
         # Check for instant_payouts capability - ONLY use real Stripe data
         if 'instant_payouts' in capabilities_dict:
             instant_status = capabilities_dict.get('instant_payouts', 'inactive')
             instant_available = instant_status == 'active'
-            print(f"   ✓ instant_payouts found in capabilities: {instant_status}")
-            print(f"   - Setting instant_available to: {instant_available}")
+            print(f"   ✓ instant_payouts found: {instant_status} -> {instant_available}")
         else:
-            print(f"   ✗ instant_payouts NOT in capabilities dict")
-            print(f"   - Full capabilities: {capabilities_dict}")
+            print(f"   ✗ instant_payouts NOT in capabilities")
             instant_available = False
         
         print(f"   - Final instant_available: {instant_available}")
@@ -137,7 +142,8 @@ def get_business_info():
             'available_balance': round(available_balance, 2),
             'pending_balance': round(pending_balance, 2),
             'payout_schedule': payout_schedule,
-            'instant_payouts_available': instant_available
+            'instant_payouts_available': instant_available,
+            'debug_capabilities': capabilities_dict  # Send full capabilities for debugging
         })
     
     except Exception as e:
