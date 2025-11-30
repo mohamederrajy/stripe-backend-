@@ -130,22 +130,73 @@ def get_business_info():
         
         print(f"   - Final instant_available: {instant_available}")
         
-        # Get account requirements/tasks
+        # Get account requirements/tasks with more detail
         account_tasks = {
             'currently_due': [],
             'eventually_due': [],
             'past_due': [],
-            'disabled_reason': None
+            'pending_verification': [],
+            'disabled_reason': None,
+            'details_submitted': False,
+            'payouts_enabled_status': payouts_enabled,
+            'charges_enabled_status': charges_enabled
         }
+        
+        # Common verification fields to check
+        all_possible_tasks = [
+            'business_profile.mcc',
+            'business_profile.url',
+            'business_type',
+            'external_account',
+            'individual.id_number',
+            'individual.ssn_last_4',
+            'individual.verification.document',
+            'individual.address.line1',
+            'individual.address.city',
+            'individual.address.postal_code',
+            'individual.dob.day',
+            'individual.dob.month',
+            'individual.dob.year',
+            'individual.email',
+            'individual.first_name',
+            'individual.last_name',
+            'individual.phone',
+            'tos_acceptance.date',
+            'tos_acceptance.ip',
+            'company.name',
+            'company.tax_id',
+            'company.address.line1',
+            'company.address.city',
+            'company.address.postal_code',
+            'company.verification.document',
+            'representative.first_name',
+            'representative.last_name'
+        ]
         
         if hasattr(account, 'requirements'):
             requirements = account.requirements
             account_tasks['currently_due'] = list(getattr(requirements, 'currently_due', [])) if hasattr(requirements, 'currently_due') else []
             account_tasks['eventually_due'] = list(getattr(requirements, 'eventually_due', [])) if hasattr(requirements, 'eventually_due') else []
             account_tasks['past_due'] = list(getattr(requirements, 'past_due', [])) if hasattr(requirements, 'past_due') else []
-            account_tasks['disabled_reason'] = getattr(requirements, 'disabled_reason', None) if hasattr(requirements, 'disabled_reason') else None
+            account_tasks['pending_verification'] = list(getattr(requirements, 'pending_verification', [])) if hasattr(requirements, 'pending_verification') else []
+            account_tasks['disabled_reason'] = getattr(requirements, 'disabled_reason', None)
         
-        print(f"📋 Account Requirements: {account_tasks}")
+        # Check if basic details have been submitted
+        if hasattr(account, 'details_submitted'):
+            account_tasks['details_submitted'] = getattr(account, 'details_submitted', False)
+        
+        # Calculate completed tasks (fields not in any due list)
+        all_due_tasks = set(account_tasks['currently_due'] + account_tasks['eventually_due'] + account_tasks['past_due'])
+        account_tasks['completed_tasks'] = [task for task in all_possible_tasks if task not in all_due_tasks]
+        
+        print(f"📋 Account Requirements Debug:")
+        print(f"   - Currently Due: {account_tasks['currently_due']}")
+        print(f"   - Past Due: {account_tasks['past_due']}")
+        print(f"   - Eventually Due: {account_tasks['eventually_due']}")
+        print(f"   - Pending Verification: {account_tasks['pending_verification']}")
+        print(f"   - Details Submitted: {account_tasks['details_submitted']}")
+        print(f"   - Charges Enabled: {charges_enabled}")
+        print(f"   - Payouts Enabled: {payouts_enabled}")
         
         return jsonify({
             'success': True,
