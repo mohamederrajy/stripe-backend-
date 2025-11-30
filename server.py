@@ -189,12 +189,82 @@ def get_business_info():
         all_due_tasks = set(account_tasks['currently_due'] + account_tasks['eventually_due'] + account_tasks['past_due'])
         account_tasks['completed_tasks'] = [task for task in all_possible_tasks if task not in all_due_tasks]
         
-        print(f"📋 Account Requirements Debug:")
-        print(f"   - Currently Due: {account_tasks['currently_due']}")
-        print(f"   - Past Due: {account_tasks['past_due']}")
-        print(f"   - Eventually Due: {account_tasks['eventually_due']}")
-        print(f"   - Pending Verification: {account_tasks['pending_verification']}")
-        print(f"   - Details Submitted: {account_tasks['details_submitted']}")
+        # Build human-readable task messages like Stripe Dashboard
+        account_tasks['dashboard_tasks'] = {
+            'active': [],
+            'completed': []
+        }
+        
+        # Active tasks from Stripe Dashboard
+        if not charges_enabled or not payouts_enabled:
+            account_tasks['dashboard_tasks']['active'].append({
+                'message': 'Charges and payouts are paused',
+                'type': 'critical'
+            })
+        
+        if account_tasks['past_due']:
+            account_tasks['dashboard_tasks']['active'].append({
+                'message': 'Provide past due information',
+                'type': 'critical'
+            })
+        
+        if account_tasks['currently_due']:
+            account_tasks['dashboard_tasks']['active'].append({
+                'message': 'Provide additional information',
+                'type': 'active'
+            })
+            
+            # Check for specific requirements
+            if 'business_profile.url' in account_tasks['currently_due']:
+                account_tasks['dashboard_tasks']['active'].append({
+                    'message': 'Update your business website',
+                    'type': 'active'
+                })
+            
+            if 'external_account' in account_tasks['currently_due']:
+                account_tasks['dashboard_tasks']['active'].append({
+                    'message': 'Add bank account for payouts',
+                    'type': 'active'
+                })
+        
+        if account_tasks['pending_verification']:
+            account_tasks['dashboard_tasks']['active'].append({
+                'message': 'Documents under review by Stripe',
+                'type': 'pending'
+            })
+        
+        # Completed tasks
+        if charges_enabled and payouts_enabled:
+            account_tasks['dashboard_tasks']['completed'].append({
+                'message': 'Account activated for payments and payouts',
+                'date': 'Active'
+            })
+        
+        if account_tasks['details_submitted']:
+            account_tasks['dashboard_tasks']['completed'].append({
+                'message': 'Business details submitted',
+                'date': 'Completed'
+            })
+        
+        if 'external_account' not in all_due_tasks:
+            account_tasks['dashboard_tasks']['completed'].append({
+                'message': 'Bank account connected',
+                'date': 'Connected'
+            })
+        
+        if 'business_profile.url' not in all_due_tasks:
+            account_tasks['dashboard_tasks']['completed'].append({
+                'message': 'Business website provided',
+                'date': 'Verified'
+            })
+        
+        print(f"📋 Account Status Debug:")
+        print(f"   - Active Tasks: {len(account_tasks['dashboard_tasks']['active'])}")
+        for task in account_tasks['dashboard_tasks']['active']:
+            print(f"     • {task['message']} ({task['type']})")
+        print(f"   - Completed Tasks: {len(account_tasks['dashboard_tasks']['completed'])}")
+        for task in account_tasks['dashboard_tasks']['completed']:
+            print(f"     ✓ {task['message']}")
         print(f"   - Charges Enabled: {charges_enabled}")
         print(f"   - Payouts Enabled: {payouts_enabled}")
         
