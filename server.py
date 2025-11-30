@@ -130,6 +130,23 @@ def get_business_info():
         
         print(f"   - Final instant_available: {instant_available}")
         
+        # Get account requirements/tasks
+        account_tasks = {
+            'currently_due': [],
+            'eventually_due': [],
+            'past_due': [],
+            'disabled_reason': None
+        }
+        
+        if hasattr(account, 'requirements'):
+            requirements = account.requirements
+            account_tasks['currently_due'] = list(getattr(requirements, 'currently_due', [])) if hasattr(requirements, 'currently_due') else []
+            account_tasks['eventually_due'] = list(getattr(requirements, 'eventually_due', [])) if hasattr(requirements, 'eventually_due') else []
+            account_tasks['past_due'] = list(getattr(requirements, 'past_due', [])) if hasattr(requirements, 'past_due') else []
+            account_tasks['disabled_reason'] = getattr(requirements, 'disabled_reason', None) if hasattr(requirements, 'disabled_reason') else None
+        
+        print(f"📋 Account Requirements: {account_tasks}")
+        
         return jsonify({
             'success': True,
             'business_name': business_name,
@@ -143,7 +160,8 @@ def get_business_info():
             'pending_balance': round(pending_balance, 2),
             'payout_schedule': payout_schedule,
             'instant_payouts_available': instant_available,
-            'debug_capabilities': capabilities_dict  # Send full capabilities for debugging
+            'debug_capabilities': capabilities_dict,
+            'account_tasks': account_tasks
         })
     
     except Exception as e:
