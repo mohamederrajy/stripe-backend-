@@ -592,6 +592,11 @@ def get_transactions():
                     if last_payment_error:
                         decline_reason = getattr(last_payment_error, 'message', 'Unknown error')
                 
+                # Get metadata for website and product name
+                metadata = getattr(pi, 'metadata', {}) or {}
+                website = metadata.get('website', 'N/A') if metadata else 'N/A'
+                product_name = metadata.get('product_name', 'N/A') if metadata else 'N/A'
+                
                 # Check if payment has been refunded and update status
                 display_status = status
                 
@@ -610,6 +615,8 @@ def get_transactions():
                     'status': display_status,  # Use updated status that reflects refunds
                     'payment_method': f"{payment_method_brand} •••• {payment_method_last4}" if payment_method_last4 != 'N/A' else payment_method_type,
                     'description': getattr(pi, 'description', 'N/A') or 'No description',
+                    'website': website,
+                    'product_name': product_name,
                     'customer': customer_display,  # Show customer ID instead of email for speed
                     'date': datetime.fromtimestamp(pi.created).strftime('%Y-%m-%d %H:%M:%S'),
                     'decline_reason': decline_reason
