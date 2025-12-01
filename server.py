@@ -592,10 +592,30 @@ def get_transactions():
                     if last_payment_error:
                         decline_reason = getattr(last_payment_error, 'message', 'Unknown error')
                 
-                # Get metadata for website and product name
-                metadata = getattr(pi, 'metadata', {}) or {}
-                website = metadata.get('website', 'N/A') if metadata else 'N/A'
-                product_name = metadata.get('product_name', 'N/A') if metadata else 'N/A'
+                # Get metadata for website and product name from PaymentIntent
+                website = 'N/A'
+                product_name = 'N/A'
+                
+                # Try to get metadata from PaymentIntent first
+                pi_metadata = getattr(pi, 'metadata', None)
+                if pi_metadata:
+                    website = pi_metadata.get('website', 'N/A') if isinstance(pi_metadata, dict) else getattr(pi_metadata, 'website', 'N/A')
+                    product_name = pi_metadata.get('product_name', 'N/A') if isinstance(pi_metadata, dict) else getattr(pi_metadata, 'product_name', 'N/A')
+                
+                # If metadata not found in PaymentIntent, try to get from Charge
+                if website == 'N/A' or product_name == 'N/A':
+                    try:
+                        charges = stripe.Charge.list(payment_intent=pi.id, limit=1)
+                        if charges and len(charges.data) > 0:
+                            charge = charges.data[0]
+                            charge_metadata = getattr(charge, 'metadata', None)
+                            if charge_metadata:
+                                if website == 'N/A':
+                                    website = charge_metadata.get('website', 'N/A') if isinstance(charge_metadata, dict) else getattr(charge_metadata, 'website', 'N/A')
+                                if product_name == 'N/A':
+                                    product_name = charge_metadata.get('product_name', 'N/A') if isinstance(charge_metadata, dict) else getattr(charge_metadata, 'product_name', 'N/A')
+                    except Exception as charge_error:
+                        print(f"⚠️ Could not retrieve charge metadata: {str(charge_error)}")
                 
                 # Check if payment has been refunded and update status
                 display_status = status
