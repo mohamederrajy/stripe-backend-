@@ -1290,6 +1290,70 @@ def refund_payment():
         }), 400
 
 
+@app.route('/get-connected-accounts', methods=['POST', 'OPTIONS'])
+def get_connected_accounts():
+    """Get all connected Stripe accounts"""
+    
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        data = request.get_json()
+        api_key = data.get('apiKey')
+        
+        if not api_key:
+            return jsonify({'success': False, 'error': 'API key is required'}), 400
+        
+        stripe.api_key = api_key
+        
+        print("🔗 Fetching connected accounts...")
+        
+        # Retrieve all connected accounts
+        accounts_list = stripe.Account.list(limit=100)
+        
+        accounts = []
+        
+        if hasattr(accounts_list, 'data'):
+            for account in accounts_list.data:
+                account_data = {
+                    'id': account.get('id', 'N/A'),
+                    'email': account.get('email', 'N/A'),
+                    'country': account.get('country', 'N/A'),
+                    'type': account.get('type', 'N/A'),
+                    'charges_enabled': account.get('charges_enabled', False),
+                    'payouts_enabled': account.get('payouts_enabled', False),
+                    'created': account.get('created', 0),
+                    'business_profile': {
+                        'name': account.get('business_profile', {}).get('name', 'N/A'),
+                        'url': account.get('business_profile', {}).get('url', 'N/A'),
+                    },
+                    'requirements': {
+                        'past_due': account.get('requirements', {}).get('past_due', []),
+                        'currently_due': account.get('requirements', {}).get('currently_due', []),
+                        'pending_verification': account.get('requirements', {}).get('pending_verification', []),
+                        'eventually_due': account.get('requirements', {}).get('eventually_due', [])
+                    }
+                }
+                accounts.append(account_data)
+        
+        print(f"✅ Found {len(accounts)} connected accounts")
+        
+        return jsonify({
+            'success': True,
+            'accounts': accounts,
+            'total': len(accounts)
+        })
+    
+    except Exception as e:
+        print(f"❌ Error fetching connected accounts: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'accounts': [],
+            'total': 0
+        }), 400
+
+
 # ============================================================
 # START SERVER
 # ============================================================
