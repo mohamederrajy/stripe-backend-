@@ -1292,7 +1292,7 @@ def refund_payment():
 
 @app.route('/get-connected-accounts', methods=['POST', 'OPTIONS'])
 def get_connected_accounts():
-    """Get all connected Stripe accounts"""
+    """Get all Stripe Connect accounts connected to main account"""
     
     if request.method == 'OPTIONS':
         return '', 204
@@ -1306,42 +1306,63 @@ def get_connected_accounts():
         
         stripe.api_key = api_key
         
-        print("🔗 Fetching connected accounts...")
+        print("🔗 Fetching Stripe Connect accounts...")
         
-        # Retrieve all connected accounts
+        # Get all connected/managed accounts
+        connected_accounts = []
         accounts_list = stripe.Account.list(limit=100)
         
-        accounts = []
-        
-        if hasattr(accounts_list, 'data'):
+        if hasattr(accounts_list, 'data') and accounts_list.data:
             for account in accounts_list.data:
-                account_data = {
-                    'id': account.get('id', 'N/A'),
-                    'email': account.get('email', 'N/A'),
-                    'country': account.get('country', 'N/A'),
-                    'type': account.get('type', 'N/A'),
+                # Build comprehensive account info
+                account_info = {
+                    'id': account.get('id'),
+                    'email': account.get('email'),
+                    'country': account.get('country'),
+                    'type': account.get('type'),  # 'express', 'custom', 'standard'
                     'charges_enabled': account.get('charges_enabled', False),
                     'payouts_enabled': account.get('payouts_enabled', False),
                     'created': account.get('created', 0),
-                    'business_profile': {
-                        'name': account.get('business_profile', {}).get('name', 'N/A'),
-                        'url': account.get('business_profile', {}).get('url', 'N/A'),
-                    },
-                    'requirements': {
-                        'past_due': account.get('requirements', {}).get('past_due', []),
-                        'currently_due': account.get('requirements', {}).get('currently_due', []),
-                        'pending_verification': account.get('requirements', {}).get('pending_verification', []),
-                        'eventually_due': account.get('requirements', {}).get('eventually_due', [])
-                    }
+                    'business_name': account.get('business_profile', {}).get('name', 'N/A'),
+                    'business_url': account.get('business_profile', {}).get('url', 'N/A'),
+                    'default_currency': account.get('default_currency', 'usd').upper(),
                 }
-                accounts.append(account_data)
+                
+                # Get requirements for verification status
+                requirements = account.get('requirements', {})
+                past_due = requirements.get('past_due', [])
+                currently_due = requirements.get('currently_due', [])
+                
+                # Determine status
+                if past_due:
+                    account_info['status'] = 'verification_needed'
+                    account_info['status_emoji'] = '🔴'
+                    account_info['status_label'] = 'Verification Needed'
+                elif not account.get('charges_enabled') or not account.get('payouts_enabled'):
+                    account_info['status'] = 'limited'
+                    account_info['status_emoji'] = '⚠️'
+                    account_info['status_label'] = 'Limited'
+                else:
+                    account_info['status'] = 'active'
+                    account_info['status_emoji'] = '✅'
+                    account_info['status_label'] = 'Active'
+                
+                # Add requirements info
+                account_info['requirements'] = {
+                    'past_due': past_due,
+                    'currently_due': currently_due,
+                    'pending_verification': requirements.get('pending_verification', []),
+                    'eventually_due': requirements.get('eventually_due', [])
+                }
+                
+                connected_accounts.append(account_info)
         
-        print(f"✅ Found {len(accounts)} connected accounts")
+        print(f"✅ Found {len(connected_accounts)} connected accounts")
         
         return jsonify({
             'success': True,
-            'accounts': accounts,
-            'total': len(accounts)
+            'accounts': connected_accounts,
+            'total': len(connected_accounts)
         })
     
     except Exception as e:
@@ -1351,6 +1372,68 @@ def get_connected_accounts():
             'error': str(e),
             'accounts': [],
             'total': 0
+        }), 400
+
+
+@app.route('/delete-connected-account', methods=['POST', 'OPTIONS'])
+def delete_connected_account():
+    """Delete/Disconnect a Stripe Connect account"""
+    
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        data = request.get_json()
+        api_key = data.get('apiKey')
+        account_id = data.get('accountId')
+        
+        if not api_key:
+            return jsonify({'success': False, 'error': 'API key is required'}), 400
+        
+        if not account_id:
+            return jsonify({'success': False, 'error': 'Account ID is required'}), 400
+        
+        stripe.api_key = api_key
+        
+        print(f"🗑️  Deleting connected account: {account_id}...")
+        
+        # Delete the connected account
+        result = stripe.Account.delete(account_id)
+        
+        print(f"✅ Account deleted successfully: {account_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Account {account_id} has been disconnected',
+            'deleted_account': account_id
+        })
+    
+    except stripe.error.InvalidRequestError as e:
+        print(f"❌ Invalid request: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': f'Invalid request: {str(e)}'
+        }), 400
+    
+    except stripe.error.AuthenticationError as e:
+        print(f"❌ Authentication error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Authentication failed. Check your API key.'
+        }), 401
+    
+    except stripe.error.PermissionError as e:
+        print(f"❌ Permission error: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'You do not have permission to delete this account'
+        }), 403
+    
+    except Exception as e:
+        print(f"❌ Error deleting account: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
         }), 400
 
 
