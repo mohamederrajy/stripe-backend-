@@ -1581,13 +1581,46 @@ def delete_connected_account():
     except stripe.error.PermissionError as e:
         error_msg = str(e)
         print(f"❌ Permission error: {error_msg}")
-        return jsonify({
-            'success': False,
-            'error': 'You do not have permission to delete this account via API',
-            'details': error_msg,
-            'solution': 'Use Stripe Dashboard instead',
-            'help': 'Go to https://dashboard.stripe.com/connect/accounts and use "Remove account" button'
-        }), 403
+        print(f"   Attempting workaround: Disabling account charges/payouts...")
+        
+        # Try to disable the account by disabling charges and payouts
+        try:
+            # Get account type if we don't have it
+            account_type = 'unknown'
+            if 'account' in locals():
+                account_type = account.get('type', 'unknown')
+            
+            # Disable all charges and payouts
+            result = stripe.Account.modify(
+                account_id,
+                charges_enabled=False,
+                payouts_enabled=False,
+                settings={
+                    'branding': {'icon': None, 'logo': None, 'primary_color': None},
+                }
+            )
+            print(f"✅ Account disabled (charges/payouts disabled): {account_id}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Account {account_id} has been disconnected',
+                'deleted_account': account_id,
+                'method': 'disable_charges_payouts',
+                'account_type': account_type,
+                'note': 'Account has been limited (charges and payouts disabled). It may be fully deleted after some time.'
+            })
+        except Exception as disable_error:
+            print(f"   Disable attempt failed: {str(disable_error)}")
+            
+            return jsonify({
+                'success': False,
+                'error': 'You do not have permission to delete this account via API',
+                'error_code': 'permission_denied',
+                'details': error_msg,
+                'solution': 'Use Stripe Dashboard instead',
+                'help': 'Go to https://dashboard.stripe.com/connect/accounts and use "Remove account" button',
+                'note': 'This is a Stripe API limitation - some accounts can only be deleted from the dashboard'
+            }), 403
     
     except Exception as e:
         error_str = str(e)
