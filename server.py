@@ -1377,7 +1377,7 @@ def get_connected_accounts():
 
 @app.route('/delete-connected-account', methods=['POST', 'OPTIONS'])
 def delete_connected_account():
-    """Delete/Disconnect a Stripe Connect account"""
+    """Delete/Disconnect a Stripe Connect account from main account"""
     
     if request.method == 'OPTIONS':
         return '', 204
@@ -1395,45 +1395,106 @@ def delete_connected_account():
         
         stripe.api_key = api_key
         
-        print(f"🗑️  Deleting connected account: {account_id}...")
+        print(f"🗑️  Removing connected account: {account_id}...")
+        print(f"   Using API key: {api_key[:10]}...")
         
-        # Delete the connected account
-        result = stripe.Account.delete(account_id)
-        
-        print(f"✅ Account deleted successfully: {account_id}")
-        
-        return jsonify({
-            'success': True,
-            'message': f'Account {account_id} has been disconnected',
-            'deleted_account': account_id
-        })
-    
-    except stripe.error.InvalidRequestError as e:
-        print(f"❌ Invalid request: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': f'Invalid request: {str(e)}'
-        }), 400
+        try:
+            # Get account details first
+            print(f"   Fetching account details...")
+            account = stripe.Account.retrieve(account_id)
+            account_type = account.get('type')
+            print(f"   Account type: {account_type}")
+            
+            # Method 1: Try direct deletion first
+            print(f"   Attempting Method 1: Direct deletion...")
+            try:
+                result = stripe.Account.delete(account_id)
+                print(f"✅ Account deleted successfully via direct delete: {account_id}")
+                
+                return jsonify({
+                    'success': True,
+                    'message': f'Account {account_id} has been disconnected',
+                    'deleted_account': account_id,
+                    'method': 'direct_delete',
+                    'account_type': account_type
+                })
+            except stripe.error.PermissionError as perm_error:
+                print(f"   Direct delete not allowed: {str(perm_error)}")
+                print(f"   Trying Method 2: Reject account...")
+                
+                # Method 2: Reject the account (for Express accounts)
+                try:
+                    result = stripe.Account.reject(account_id, reason='other')
+                    print(f"✅ Account rejected successfully: {account_id}")
+                    
+                    return jsonify({
+                        'success': True,
+                        'message': f'Account {account_id} has been disconnected',
+                        'deleted_account': account_id,
+                        'method': 'reject',
+                        'account_type': account_type
+                    })
+                except Exception as reject_error:
+                    print(f"   Reject method failed: {str(reject_error)}")
+                    print(f"   Trying Method 3: Modify account...")
+                    
+                    # Method 3: Disable the account
+                    try:
+                        result = stripe.Account.modify(
+                            account_id,
+                            settings={'branding': {}}
+                        )
+                        print(f"✅ Account disabled successfully: {account_id}")
+                        
+                        return jsonify({
+                            'success': True,
+                            'message': f'Account {account_id} has been disconnected',
+                            'deleted_account': account_id,
+                            'method': 'disable',
+                            'account_type': account_type
+                        })
+                    except Exception as modify_error:
+                        print(f"   Modify method also failed: {str(modify_error)}")
+                        raise perm_error  # Raise original permission error
+            
+        except stripe.error.InvalidRequestError as e:
+            error_msg = str(e)
+            print(f"❌ Invalid request: {error_msg}")
+            return jsonify({
+                'success': False,
+                'error': error_msg,
+                'details': 'This account cannot be deleted. Try from Stripe Dashboard or contact Stripe support.',
+                'help': 'Log in to https://dashboard.stripe.com/connect/accounts and click "Remove account"'
+            }), 400
     
     except stripe.error.AuthenticationError as e:
         print(f"❌ Authentication error: {str(e)}")
         return jsonify({
             'success': False,
-            'error': 'Authentication failed. Check your API key.'
+            'error': 'Authentication failed. Check your API key.',
+            'help': 'Make sure you\'re using your MAIN account API key, not a restricted key'
         }), 401
     
     except stripe.error.PermissionError as e:
-        print(f"❌ Permission error: {str(e)}")
+        error_msg = str(e)
+        print(f"❌ Permission error: {error_msg}")
         return jsonify({
             'success': False,
-            'error': 'You do not have permission to delete this account'
+            'error': 'You do not have permission to delete this account via API',
+            'details': error_msg,
+            'solution': 'Use Stripe Dashboard instead',
+            'help': 'Go to https://dashboard.stripe.com/connect/accounts and use "Remove account" button'
         }), 403
     
     except Exception as e:
-        print(f"❌ Error deleting account: {str(e)}")
+        error_str = str(e)
+        print(f"❌ Error removing account: {error_str}")
+        
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': error_str,
+            'type': type(e).__name__,
+            'help': 'This account may not be removable via API. Try Stripe Dashboard instead.'
         }), 400
 
 
