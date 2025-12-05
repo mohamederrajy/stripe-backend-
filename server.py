@@ -1376,6 +1376,65 @@ def get_connected_accounts():
         }), 400
 
 
+@app.route('/disable-connected-account', methods=['POST', 'OPTIONS'])
+def disable_connected_account():
+    """Disable a Stripe Connect account (turn off charges/payouts)"""
+    
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        data = request.get_json()
+        api_key = data.get('apiKey')
+        account_id = data.get('accountId')
+        
+        if not api_key:
+            return jsonify({'success': False, 'error': 'API key is required'}), 400
+        
+        if not account_id:
+            return jsonify({'success': False, 'error': 'Account ID is required'}), 400
+        
+        stripe.api_key = api_key
+        
+        print(f"🔒 Disabling account: {account_id}")
+        
+        # Get account details
+        account = stripe.Account.retrieve(account_id)
+        account_type = account.get('type')
+        
+        print(f"   Account type: {account_type}")
+        print(f"   Disabling charges and payouts...")
+        
+        # Disable charges and payouts
+        result = stripe.Account.modify(
+            account_id,
+            charges_enabled=False,
+            payouts_enabled=False
+        )
+        
+        print(f"✅ Account disabled: {account_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Account {account_id} has been disabled (no charges or payouts allowed)',
+            'account_id': account_id,
+            'method': 'disable',
+            'account_type': account_type,
+            'charges_enabled': False,
+            'payouts_enabled': False
+        })
+    
+    except Exception as e:
+        error_msg = str(e)
+        print(f"❌ Error disabling account: {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'help': 'Failed to disable account. Please try again or contact support.'
+        }), 400
+
+
 @app.route('/check-account-deletable', methods=['POST', 'OPTIONS'])
 def check_account_deletable():
     """Check if an account can be deleted"""
