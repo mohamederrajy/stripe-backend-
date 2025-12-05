@@ -1666,4 +1666,4 @@ if __name__ == '__main__':
     print("   • Regular cards - CHARGED")
     print("\n" + "="*70 + "\n")
     
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=False)
