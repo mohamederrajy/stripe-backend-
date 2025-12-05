@@ -1475,90 +1475,36 @@ def delete_connected_account():
         
         stripe.api_key = api_key
         
-        print(f"🗑️  Removing connected account: {account_id}...")
-        print(f"   Using API key: {api_key[:10]}...")
+        print(f"🗑️  Disconnecting account: {account_id}")
         
         try:
-            # Get account details first
+            # Get account details
             print(f"   Fetching account details...")
             account = stripe.Account.retrieve(account_id)
             account_type = account.get('type')
             print(f"   Account type: {account_type}")
             
-            # Check if account can be deleted
-            print(f"   Checking account state...")
-            try:
-                balance = stripe.Balance.retrieve(stripe_account=account_id)
-                total_balance = 0
-                if balance.available:
-                    total_balance += sum([b['amount'] for b in balance.available])
-                if balance.pending:
-                    total_balance += sum([b['amount'] for b in balance.pending])
-                print(f"   Account balance: ${total_balance/100:.2f}")
-            except:
-                print(f"   Could not retrieve balance")
+            # IMPORTANT: Express/Custom accounts cannot be deleted via Stripe API
+            # Solution: Disable the account (effectively disconnecting it)
+            print(f"   ⚠️  Stripe API limitation: {account_type} accounts can only be fully deleted from Dashboard")
+            print(f"   Workaround: Disabling account (no charges/payouts allowed)...")
             
-            # Method 1: Try direct deletion first
-            print(f"   Attempting Method 1: Direct deletion with stripe.Account.delete()...")
-            try:
-                result = stripe.Account.delete(account_id)
-                print(f"✅ Account deleted successfully via direct delete: {account_id}")
-                
-                return jsonify({
-                    'success': True,
-                    'message': f'Account {account_id} has been disconnected',
-                    'deleted_account': account_id,
-                    'method': 'direct_delete',
-                    'account_type': account_type
-                })
-            except stripe.error.PermissionError as perm_error:
-                print(f"   ⚠️  Direct delete permission error: {str(perm_error)}")
-                print(f"   Trying Method 2: Using API directly...")
-                
-                # Method 2: Try using raw API request
-                try:
-                    import requests
-                    headers = {
-                        'Authorization': f'Bearer {api_key}',
-                        'Content-Type': 'application/json'
-                    }
-                    response = requests.delete(
-                        f'https://api.stripe.com/v1/accounts/{account_id}',
-                        headers=headers
-                    )
-                    
-                    if response.status_code == 200:
-                        print(f"✅ Account deleted via raw API: {account_id}")
-                        return jsonify({
-                            'success': True,
-                            'message': f'Account {account_id} has been disconnected',
-                            'deleted_account': account_id,
-                            'method': 'raw_api',
-                            'account_type': account_type
-                        })
-                    else:
-                        print(f"   Raw API failed: {response.status_code} - {response.text}")
-                        raise perm_error
-                        
-                except Exception as api_error:
-                    print(f"   Raw API method failed: {str(api_error)}")
-                    print(f"   Trying Method 3: Account rejection...")
-                    
-                    # Method 3: Try rejecting the account
-                    try:
-                        result = stripe.Account.reject(account_id, reason='other')
-                        print(f"✅ Account rejected successfully: {account_id}")
-                        
-                        return jsonify({
-                            'success': True,
-                            'message': f'Account {account_id} has been disconnected',
-                            'deleted_account': account_id,
-                            'method': 'reject',
-                            'account_type': account_type
-                        })
-                    except Exception as reject_error:
-                        print(f"   Reject also failed: {str(reject_error)}")
-                        raise perm_error  # Raise original permission error
+            # Disable the account
+            stripe.Account.modify(
+                account_id,
+                charges_enabled=False,
+                payouts_enabled=False
+            )
+            print(f"✅ Account disabled successfully: {account_id}")
+            
+            return jsonify({
+                'success': True,
+                'message': f'Account {account_id} has been disconnected (charges & payouts disabled)',
+                'deleted_account': account_id,
+                'method': 'disable_account',
+                'account_type': account_type,
+                'note': 'Account is now disabled. For complete removal from Stripe, visit: https://dashboard.stripe.com/connect/accounts'
+            })
             
         except stripe.error.InvalidRequestError as e:
             error_msg = str(e)
