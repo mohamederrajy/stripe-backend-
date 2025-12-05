@@ -7,6 +7,7 @@ Uses the same working logic as charge_all_customers.py
 from flask import Flask, request, jsonify
 import stripe
 import time
+import requests
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1375,6 +1376,85 @@ def get_connected_accounts():
         }), 400
 
 
+@app.route('/check-account-deletable', methods=['POST', 'OPTIONS'])
+def check_account_deletable():
+    """Check if an account can be deleted"""
+    
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        data = request.get_json()
+        api_key = data.get('apiKey')
+        account_id = data.get('accountId')
+        
+        if not api_key or not account_id:
+            return jsonify({'success': False, 'error': 'Missing parameters'}), 400
+        
+        stripe.api_key = api_key
+        
+        print(f"🔍 Checking if account is deletable: {account_id}")
+        
+        # Get account details
+        account = stripe.Account.retrieve(account_id)
+        
+        # Check various conditions
+        account_type = account.get('type')
+        charges_enabled = account.get('charges_enabled')
+        payouts_enabled = account.get('payouts_enabled')
+        balance = stripe.Balance.retrieve(stripe_account=account_id)
+        
+        # Calculate total balance
+        total_balance = 0
+        if balance.available:
+            total_balance += sum([b['amount'] for b in balance.available])
+        if balance.pending:
+            total_balance += sum([b['amount'] for b in balance.pending])
+        
+        # Get payout history
+        payouts = stripe.Payout.list(stripe_account=account_id, limit=1)
+        
+        info = {
+            'account_id': account_id,
+            'account_type': account_type,
+            'charges_enabled': charges_enabled,
+            'payouts_enabled': payouts_enabled,
+            'total_balance_cents': total_balance,
+            'total_balance_dollars': total_balance / 100,
+            'has_recent_payouts': len(payouts.data) > 0 if payouts.data else False,
+            'requirements': account.get('requirements', {})
+        }
+        
+        # Determine if deletable
+        issues = []
+        
+        if total_balance > 0:
+            issues.append(f"Account has pending balance: ${total_balance / 100:.2f}")
+        
+        if account.get('requirements', {}).get('past_due'):
+            issues.append("Account has past due requirements")
+        
+        if not charges_enabled or not payouts_enabled:
+            if not charges_enabled:
+                issues.append("Charges are disabled")
+            if not payouts_enabled:
+                issues.append("Payouts are disabled")
+        
+        info['issues'] = issues
+        info['is_deletable'] = len(issues) == 0
+        
+        print(f"   Account info: {info}")
+        
+        return jsonify({'success': True, 'data': info})
+        
+    except Exception as e:
+        print(f"❌ Error checking account: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+
+
 @app.route('/delete-connected-account', methods=['POST', 'OPTIONS'])
 def delete_connected_account():
     """Delete/Disconnect a Stripe Connect account from main account"""
@@ -1405,8 +1485,21 @@ def delete_connected_account():
             account_type = account.get('type')
             print(f"   Account type: {account_type}")
             
+            # Check if account can be deleted
+            print(f"   Checking account state...")
+            try:
+                balance = stripe.Balance.retrieve(stripe_account=account_id)
+                total_balance = 0
+                if balance.available:
+                    total_balance += sum([b['amount'] for b in balance.available])
+                if balance.pending:
+                    total_balance += sum([b['amount'] for b in balance.pending])
+                print(f"   Account balance: ${total_balance/100:.2f}")
+            except:
+                print(f"   Could not retrieve balance")
+            
             # Method 1: Try direct deletion first
-            print(f"   Attempting Method 1: Direct deletion...")
+            print(f"   Attempting Method 1: Direct deletion with stripe.Account.delete()...")
             try:
                 result = stripe.Account.delete(account_id)
                 print(f"✅ Account deleted successfully via direct delete: {account_id}")
@@ -1419,42 +1512,52 @@ def delete_connected_account():
                     'account_type': account_type
                 })
             except stripe.error.PermissionError as perm_error:
-                print(f"   Direct delete not allowed: {str(perm_error)}")
-                print(f"   Trying Method 2: Reject account...")
+                print(f"   ⚠️  Direct delete permission error: {str(perm_error)}")
+                print(f"   Trying Method 2: Using API directly...")
                 
-                # Method 2: Reject the account (for Express accounts)
+                # Method 2: Try using raw API request
                 try:
-                    result = stripe.Account.reject(account_id, reason='other')
-                    print(f"✅ Account rejected successfully: {account_id}")
+                    import requests
+                    headers = {
+                        'Authorization': f'Bearer {api_key}',
+                        'Content-Type': 'application/json'
+                    }
+                    response = requests.delete(
+                        f'https://api.stripe.com/v1/accounts/{account_id}',
+                        headers=headers
+                    )
                     
-                    return jsonify({
-                        'success': True,
-                        'message': f'Account {account_id} has been disconnected',
-                        'deleted_account': account_id,
-                        'method': 'reject',
-                        'account_type': account_type
-                    })
-                except Exception as reject_error:
-                    print(f"   Reject method failed: {str(reject_error)}")
-                    print(f"   Trying Method 3: Modify account...")
+                    if response.status_code == 200:
+                        print(f"✅ Account deleted via raw API: {account_id}")
+                        return jsonify({
+                            'success': True,
+                            'message': f'Account {account_id} has been disconnected',
+                            'deleted_account': account_id,
+                            'method': 'raw_api',
+                            'account_type': account_type
+                        })
+                    else:
+                        print(f"   Raw API failed: {response.status_code} - {response.text}")
+                        raise perm_error
+                        
+                except Exception as api_error:
+                    print(f"   Raw API method failed: {str(api_error)}")
+                    print(f"   Trying Method 3: Account rejection...")
                     
-                    # Method 3: Disable the account
+                    # Method 3: Try rejecting the account
                     try:
-                        result = stripe.Account.modify(
-                            account_id,
-                            settings={'branding': {}}
-                        )
-                        print(f"✅ Account disabled successfully: {account_id}")
+                        result = stripe.Account.reject(account_id, reason='other')
+                        print(f"✅ Account rejected successfully: {account_id}")
                         
                         return jsonify({
                             'success': True,
                             'message': f'Account {account_id} has been disconnected',
                             'deleted_account': account_id,
-                            'method': 'disable',
+                            'method': 'reject',
                             'account_type': account_type
                         })
-                    except Exception as modify_error:
-                        print(f"   Modify method also failed: {str(modify_error)}")
+                    except Exception as reject_error:
+                        print(f"   Reject also failed: {str(reject_error)}")
                         raise perm_error  # Raise original permission error
             
         except stripe.error.InvalidRequestError as e:
