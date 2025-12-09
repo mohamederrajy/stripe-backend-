@@ -1220,8 +1220,7 @@ def charge_customers():
                     'timestamp': datetime.now().isoformat()
                 }
         
-        # Use parallel processing to charge customers FAST!
-        # Process up to 10 customers at once (safe for Stripe Radar)
+        # Process charges one-by-one with delay between each
         def generate_results():
             """Generator that yields results as they complete for real-time streaming"""
             # Reset stop flag at start
@@ -1232,31 +1231,31 @@ def charge_customers():
             successful_count = 0
             failed_count = 0
             
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                # Submit all charging tasks
-                future_to_customer = {
-                    executor.submit(charge_single_customer, customer): customer 
-                    for customer in customers_to_charge
-                }
+            # Process customers ONE BY ONE (sequentially)
+            for idx, customer in enumerate(customers_to_charge):
+                # CHECK IF STOP WAS REQUESTED
+                if charging_state['should_stop']:
+                    print(f"🛑 Stop signal detected - stopped at customer {idx} of {len(customers_to_charge)}")
+                    # Send stop event
+                    yield f'data: {json.dumps({"type": "stopped", "successful": successful_count, "failed": failed_count})}\n\n'
+                    return  # Stop the generator
                 
-                # Collect and stream results as they complete
-                for future in as_completed(future_to_customer):
-                    # CHECK IF STOP WAS REQUESTED
-                    if charging_state['should_stop']:
-                        print("🛑 Stop signal detected - cancelling remaining charges")
-                        # Send stop event
-                        yield f'data: {json.dumps({"type": "stopped", "successful": successful_count, "failed": failed_count})}\n\n'
-                        return  # Stop the generator
-                    
-                    result = future.result()
-                    
-                    if result['status'] == 'success':
-                        successful_count += 1
-                    else:
-                        failed_count += 1
-                    
-                    # Send each result as it completes (real-time streaming!)
-                    yield f'data: {json.dumps({"type": "result", "charge": result, "successful": successful_count, "failed": failed_count})}\n\n'
+                # Charge this customer
+                result = charge_single_customer(customer)
+                
+                if result['status'] == 'success':
+                    successful_count += 1
+                else:
+                    failed_count += 1
+                
+                # Send result immediately (real-time streaming!)
+                yield f'data: {json.dumps({"type": "result", "charge": result, "successful": successful_count, "failed": failed_count})}\n\n'
+                
+                # Apply delay AFTER processing this customer (except last one)
+                if idx < len(customers_to_charge) - 1:
+                    if delay > 0:
+                        print(f"⏱️ Delaying {delay}s before next charge...")
+                        time.sleep(delay)
             
             # Send final summary
             yield f'data: {json.dumps({"type": "complete", "successful": successful_count, "failed": failed_count, "total": len(customers_to_charge)})}\n\n'
