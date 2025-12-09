@@ -14,6 +14,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 app = Flask(__name__)
 
+# Global state for charging control
+charging_state = {
+    'should_stop': False,
+    'session_id': None
+}
+
 # ============================================================
 # CORS CONFIGURATION
 # ============================================================
@@ -42,6 +48,27 @@ def health():
         'message': 'Backend is running',
         'timestamp': datetime.now().isoformat()
     })
+
+
+@app.route('/stop-charging', methods=['POST', 'OPTIONS'])
+def stop_charging():
+    """Stop the current charging operation"""
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        charging_state['should_stop'] = True
+        print("🛑 Stop signal received - halting charge processing")
+        return jsonify({
+            'success': True,
+            'message': 'Charging operation stopped'
+        })
+    except Exception as e:
+        print(f"❌ Error stopping charge: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
 
 
 @app.route('/get-business-info', methods=['POST', 'OPTIONS'])
@@ -1197,6 +1224,9 @@ def charge_customers():
         # Process up to 10 customers at once (safe for Stripe Radar)
         def generate_results():
             """Generator that yields results as they complete for real-time streaming"""
+            # Reset stop flag at start
+            charging_state['should_stop'] = False
+            
             yield f'data: {json.dumps({"type": "start", "total": len(customers_to_charge)})}\n\n'
             
             successful_count = 0
@@ -1211,6 +1241,13 @@ def charge_customers():
                 
                 # Collect and stream results as they complete
                 for future in as_completed(future_to_customer):
+                    # CHECK IF STOP WAS REQUESTED
+                    if charging_state['should_stop']:
+                        print("🛑 Stop signal detected - cancelling remaining charges")
+                        # Send stop event
+                        yield f'data: {json.dumps({"type": "stopped", "successful": successful_count, "failed": failed_count})}\n\n'
+                        return  # Stop the generator
+                    
                     result = future.result()
                     
                     if result['status'] == 'success':
