@@ -4,10 +4,11 @@ Flask Backend for Stripe Rebilling Dashboard
 Uses the same working logic as charge_all_customers.py
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 import stripe
 import time
 import requests
+import json
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1194,25 +1195,40 @@ def charge_customers():
         
         # Use parallel processing to charge customers FAST!
         # Process up to 10 customers at once (safe for Stripe Radar)
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            # Submit all charging tasks
-            future_to_customer = {
-                executor.submit(charge_single_customer, customer): customer 
-                for customer in customers_to_charge
-            }
+        def generate_results():
+            """Generator that yields results as they complete for real-time streaming"""
+            yield f'data: {json.dumps({"type": "start", "total": len(customers_to_charge)})}\n\n'
             
-            # Collect results as they complete
-            for future in as_completed(future_to_customer):
-                result = future.result()
+            successful_count = 0
+            failed_count = 0
+            
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                # Submit all charging tasks
+                future_to_customer = {
+                    executor.submit(charge_single_customer, customer): customer 
+                    for customer in customers_to_charge
+                }
                 
-                if result['status'] == 'success':
-                    results['successful'] += 1
-                    results['charges'].append(result)
-                else:
-                    results['failed'] += 1
-                    results['charges'].append(result)
+                # Collect and stream results as they complete
+                for future in as_completed(future_to_customer):
+                    result = future.result()
+                    
+                    if result['status'] == 'success':
+                        successful_count += 1
+                    else:
+                        failed_count += 1
+                    
+                    # Send each result as it completes (real-time streaming!)
+                    yield f'data: {json.dumps({"type": "result", "charge": result, "successful": successful_count, "failed": failed_count})}\n\n'
+            
+            # Send final summary
+            yield f'data: {json.dumps({"type": "complete", "successful": successful_count, "failed": failed_count, "total": len(customers_to_charge)})}\n\n'
         
-        return jsonify(results)
+        return Response(generate_results(), mimetype='text/event-stream', headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Access-Control-Allow-Origin': '*'
+        })
     
     except Exception as e:
         return jsonify({
@@ -1376,267 +1392,6 @@ def get_connected_accounts():
         }), 400
 
 
-@app.route('/disable-connected-account', methods=['POST', 'OPTIONS'])
-def disable_connected_account():
-    """Disable a Stripe Connect account (turn off charges/payouts)"""
-    
-    if request.method == 'OPTIONS':
-        return '', 204
-    
-    try:
-        data = request.get_json()
-        api_key = data.get('apiKey')
-        account_id = data.get('accountId')
-        
-        if not api_key:
-            return jsonify({'success': False, 'error': 'API key is required'}), 400
-        
-        if not account_id:
-            return jsonify({'success': False, 'error': 'Account ID is required'}), 400
-        
-        stripe.api_key = api_key
-        
-        print(f"🔒 Disabling account: {account_id}")
-        
-        # Get account details
-        account = stripe.Account.retrieve(account_id)
-        account_type = account.get('type')
-        
-        print(f"   Account type: {account_type}")
-        print(f"   Disabling charges and payouts...")
-        
-        # Disable charges and payouts
-        result = stripe.Account.modify(
-            account_id,
-            charges_enabled=False,
-            payouts_enabled=False
-        )
-        
-        print(f"✅ Account disabled: {account_id}")
-        
-        return jsonify({
-            'success': True,
-            'message': f'Account {account_id} has been disabled (no charges or payouts allowed)',
-            'account_id': account_id,
-            'method': 'disable',
-            'account_type': account_type,
-            'charges_enabled': False,
-            'payouts_enabled': False
-        })
-    
-    except Exception as e:
-        error_msg = str(e)
-        print(f"❌ Error disabling account: {error_msg}")
-        
-        return jsonify({
-            'success': False,
-            'error': error_msg,
-            'help': 'Failed to disable account. Please try again or contact support.'
-        }), 400
-
-
-@app.route('/check-account-deletable', methods=['POST', 'OPTIONS'])
-def check_account_deletable():
-    """Check if an account can be deleted"""
-    
-    if request.method == 'OPTIONS':
-        return '', 204
-    
-    try:
-        data = request.get_json()
-        api_key = data.get('apiKey')
-        account_id = data.get('accountId')
-        
-        if not api_key or not account_id:
-            return jsonify({'success': False, 'error': 'Missing parameters'}), 400
-        
-        stripe.api_key = api_key
-        
-        print(f"🔍 Checking if account is deletable: {account_id}")
-        
-        # Get account details
-        account = stripe.Account.retrieve(account_id)
-        
-        # Check various conditions
-        account_type = account.get('type')
-        charges_enabled = account.get('charges_enabled')
-        payouts_enabled = account.get('payouts_enabled')
-        balance = stripe.Balance.retrieve(stripe_account=account_id)
-        
-        # Calculate total balance
-        total_balance = 0
-        if balance.available:
-            total_balance += sum([b['amount'] for b in balance.available])
-        if balance.pending:
-            total_balance += sum([b['amount'] for b in balance.pending])
-        
-        # Get payout history
-        payouts = stripe.Payout.list(stripe_account=account_id, limit=1)
-        
-        info = {
-            'account_id': account_id,
-            'account_type': account_type,
-            'charges_enabled': charges_enabled,
-            'payouts_enabled': payouts_enabled,
-            'total_balance_cents': total_balance,
-            'total_balance_dollars': total_balance / 100,
-            'has_recent_payouts': len(payouts.data) > 0 if payouts.data else False,
-            'requirements': account.get('requirements', {})
-        }
-        
-        # Determine if deletable
-        issues = []
-        
-        if total_balance > 0:
-            issues.append(f"Account has pending balance: ${total_balance / 100:.2f}")
-        
-        if account.get('requirements', {}).get('past_due'):
-            issues.append("Account has past due requirements")
-        
-        if not charges_enabled or not payouts_enabled:
-            if not charges_enabled:
-                issues.append("Charges are disabled")
-            if not payouts_enabled:
-                issues.append("Payouts are disabled")
-        
-        info['issues'] = issues
-        info['is_deletable'] = len(issues) == 0
-        
-        print(f"   Account info: {info}")
-        
-        return jsonify({'success': True, 'data': info})
-        
-    except Exception as e:
-        print(f"❌ Error checking account: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 400
-
-
-@app.route('/delete-connected-account', methods=['POST', 'OPTIONS'])
-def delete_connected_account():
-    """Delete/Disconnect a Stripe Connect account from main account"""
-    
-    if request.method == 'OPTIONS':
-        return '', 204
-    
-    try:
-        data = request.get_json()
-        api_key = data.get('apiKey')
-        account_id = data.get('accountId')
-        
-        if not api_key:
-            return jsonify({'success': False, 'error': 'API key is required'}), 400
-        
-        if not account_id:
-            return jsonify({'success': False, 'error': 'Account ID is required'}), 400
-        
-        stripe.api_key = api_key
-        
-        print(f"🗑️  Disconnecting account: {account_id}")
-        
-        try:
-            # Get account details
-            print(f"   Fetching account details...")
-            account = stripe.Account.retrieve(account_id)
-            account_type = account.get('type')
-            print(f"   Account type: {account_type}")
-            
-            # IMPORTANT: Express/Custom accounts cannot be deleted via Stripe API
-            # Solution: Disable the account (effectively disconnecting it)
-            print(f"   ⚠️  Stripe API limitation: {account_type} accounts can only be fully deleted from Dashboard")
-            print(f"   Workaround: Disabling account (no charges/payouts allowed)...")
-            
-            # Disable the account
-            stripe.Account.modify(
-                account_id,
-                charges_enabled=False,
-                payouts_enabled=False
-            )
-            print(f"✅ Account disabled successfully: {account_id}")
-            
-            return jsonify({
-                'success': True,
-                'message': f'Account {account_id} has been disconnected (charges & payouts disabled)',
-                'deleted_account': account_id,
-                'method': 'disable_account',
-                'account_type': account_type,
-                'note': 'Account is now disabled. For complete removal from Stripe, visit: https://dashboard.stripe.com/connect/accounts'
-            })
-            
-        except stripe.error.InvalidRequestError as e:
-            error_msg = str(e)
-            print(f"❌ Invalid request: {error_msg}")
-            return jsonify({
-                'success': False,
-                'error': error_msg,
-                'details': 'This account cannot be deleted. Try from Stripe Dashboard or contact Stripe support.',
-                'help': 'Log in to https://dashboard.stripe.com/connect/accounts and click "Remove account"'
-            }), 400
-    
-    except stripe.error.AuthenticationError as e:
-        print(f"❌ Authentication error: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': 'Authentication failed. Check your API key.',
-            'help': 'Make sure you\'re using your MAIN account API key, not a restricted key'
-        }), 401
-    
-    except stripe.error.PermissionError as e:
-        error_msg = str(e)
-        print(f"❌ Permission error: {error_msg}")
-        print(f"   Attempting workaround: Disabling account charges/payouts...")
-        
-        # Try to disable the account by disabling charges and payouts
-        try:
-            # Get account type if we don't have it
-            account_type = 'unknown'
-            if 'account' in locals():
-                account_type = account.get('type', 'unknown')
-            
-            # Disable all charges and payouts
-            result = stripe.Account.modify(
-                account_id,
-                charges_enabled=False,
-                payouts_enabled=False,
-                settings={
-                    'branding': {'icon': None, 'logo': None, 'primary_color': None},
-                }
-            )
-            print(f"✅ Account disabled (charges/payouts disabled): {account_id}")
-            
-            return jsonify({
-                'success': True,
-                'message': f'Account {account_id} has been disconnected',
-                'deleted_account': account_id,
-                'method': 'disable_charges_payouts',
-                'account_type': account_type,
-                'note': 'Account has been limited (charges and payouts disabled). It may be fully deleted after some time.'
-            })
-        except Exception as disable_error:
-            print(f"   Disable attempt failed: {str(disable_error)}")
-            
-            return jsonify({
-                'success': False,
-                'error': 'You do not have permission to delete this account via API',
-                'error_code': 'permission_denied',
-                'details': error_msg,
-                'solution': 'Use Stripe Dashboard instead',
-                'help': 'Go to https://dashboard.stripe.com/connect/accounts and use "Remove account" button',
-                'note': 'This is a Stripe API limitation - some accounts can only be deleted from the dashboard'
-            }), 403
-    
-    except Exception as e:
-        error_str = str(e)
-        print(f"❌ Error removing account: {error_str}")
-        
-        return jsonify({
-            'success': False,
-            'error': error_str,
-            'type': type(e).__name__,
-            'help': 'This account may not be removable via API. Try Stripe Dashboard instead.'
-        }), 400
 
 
 # ============================================================
@@ -1666,4 +1421,4 @@ if __name__ == '__main__':
     print("   • Regular cards - CHARGED")
     print("\n" + "="*70 + "\n")
     
-    app.run(host='0.0.0.0', port=5001, debug=False)
+    app.run(host='0.0.0.0', port=5001, debug=True)
